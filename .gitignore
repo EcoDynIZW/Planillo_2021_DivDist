@@ -47,3 +47,15 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Processed geo data that is 100+ MB
+1_EnvironmentalScales/FocalMean500m_Stack.tif
+1_EnvironmentalScales/FocalMean1km_Stack.tif
+1_EnvironmentalScales/FocalMean2km_Stack.tif
+1_EnvironmentalScales/FocalMean5km_Stack.tif
+
+# Output that is 100+ MB
+*_MCMCtrace_omega.pdf
+*_Abu_3sites.rds
+model_birds_3sites_perkm.rds
+Predict_Berlin_100m_birds_3sites.csv
