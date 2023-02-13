@@ -1,0 +1,391 @@
+---
+title: "Explore_transect_community"
+author: "Aimara Planillo"
+date: "3/30/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Summary and Plots of transect diversity data
+
+### packages
+```{r}
+library(sf)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(FD)
+library(BiodiversityR)
+library(gridExtra) # to do the final arrangement of the plots
+```
+
+### workspace
+```{r}
+WorkDir <- getwd()
+
+Data_wd <- file.path(WorkDir, "2_Raw_data/")
+Plots_wd <- file.path(WorkDir, "5_Results/Plots_birds")
+```
+
+# Get data summaries transect
+
+```{r load data for summaries}
+# load transects and get length
+transects <- read_sf(paste0(Data_wd,
+                            "/geodata/birds_transects_geometry_25833.gpkg"))
+transects
+plot(st_geometry(transects))
+transects.lengths <- st_length(transects)/1000
+transects.lengths2 <- cbind.data.frame(site = transects$routcode_2, 
+                                    length = as.numeric(transects.lengths))
+# order transects as
+transects.lengths2 <- transects.lengths2[order(transects.lengths2$site),]
+
+# load bird data
+birds.raw <- read.csv(paste0(Data_wd, "/Birds_sitexsp_fullnames.csv"))
+head(birds.raw)
+
+birds.abund <- rowSums(birds.raw[-1])
+birds.sp <- rowSums(birds.raw[-1] > 0)
+
+birds.summary <- cbind.data.frame(site = tolower(birds.raw$SITE), 
+                                  bird.sp = birds.sp,
+                                  bird.ind = birds.abund)
+
+
+# load env data
+env100m.tmp <- read.csv("./2_Raw_data/transects_allenvir_100m.csv")
+
+# renaming covariates for the analysis
+abiotic.covariates <- cbind.data.frame(site = env100m.tmp$routecode_2, 
+                                       tree = env100m.tmp$tree_cover,
+                                       o.green = env100m.tmp$open_green,
+                                       noise = env100m.tmp$noise,
+                                       pop = env100m.tmp$pop_100m)
+# prey variables
+carabids <- read.csv("./2_Raw_data/carabids_summary_pois_predictions.csv")
+grasshoppers <- read.csv("./2_Raw_data/grasshoppers_summary_pois_predictions.csv")
+spiders <- read.csv("./2_Raw_data/spiders_summary_pois_predictions.csv")
+
+prey.abu <- cbind.data.frame(site = carabids$site,
+                             prey = carabids$Abu + grasshoppers$Abu + spiders$Abu)
+
+transects.variables <- left_join(transects.lengths2, birds.summary, by = "site") %>% 
+  mutate("ind/km" = bird.ind/length) %>% 
+  left_join(abiotic.covariates, by = "site") %>% 
+  left_join(prey.abu, by = "site")
+
+transects.variables
+write.csv(transects.variables, "./4_Processed_data/Transects_variables.csv")
+```
+
+
+# Get covariates summaries by transect to plot
+
+```{r modify data format}
+toplot.1 <- transects.variables %>% 
+  mutate(S = bird.sp, A = bird.ind, T = tree, OG = o.green, 
+         N = noise, HP = pop) %>%
+  gather(my.variable, label.value, S:HP) %>%
+  dplyr::select(c(site, my.variable, label.value))
+
+my.values <- transects.variables %>% 
+  mutate(S = bird.sp/max(bird.sp), A = bird.ind/max(bird.ind), T = tree/max(tree), 
+         OG = o.green/max(o.green), N = noise/max(noise), HP = pop/max(pop)) %>%
+  gather(my.variable, my.value, S:HP)  %>%
+  dplyr::select(site, my.variable, my.value)
+
+
+my.values
+toplot <- cbind.data.frame(toplot.1, my.value = my.values$my.value)
+
+toplot$my.variable <- factor(toplot$my.variable, levels = c("S", "A", "T", "OG", "N", "HP"))
+```
+
+```{r plot variables}
+colnames(toplot)
+
+# subset for testing
+species.variables <- c('S')
+
+test <- toplot %>%
+  filter(my.variable %in% species.variables) %>%
+  filter(site == "be2") 
+
+ggplot(data=test, aes(x=0, y = my.value))+
+  geom_bar(stat="identity") 
+
+ggplot(data=test, aes(x=0, y = my.value)) +
+  geom_bar(stat="identity", width = 0.8, fill = "blue") +
+  geom_text(aes(label = round(my.value,1), x = 0.5, y = 0.1), 
+            size = 30, vjust = 0, hjust = 0) +
+  geom_text(aes(label = as.character(my.variable)), x = -0.5, y = 0.1, 
+            size = 30, vjust = 0, hjust = 1) +
+  xlim(c(-2,2)) +
+  ylim(c(0,1)) +
+  theme_void() # This widens the right margin
+
+# for each transect
+transects.names <- unique(toplot$site)  
+myvariable.names <- c("S","A","T", "OG", "N", "HP")
+
+test <- toplot %>%
+  filter (site == transects.names[1]) 
+
+ggplot(data = test, aes(x=0, y = my.value)) + 
+      geom_bar(stat="identity",  width = 0.5, aes(fill = my.variable)) +
+    scale_fill_manual(values = c("darkblue", "lightblue", "darkgreen", "lightgreen", "grey", "darkorange"))+
+  geom_text(aes(label = round(label.value,1), x = 0.4, y = 0), 
+            size = 15, vjust = 0, hjust = 0) +
+  geom_text(aes(label = as.character(my.variable)), x = -0.4, y = 0, 
+            size = 15, vjust = 0, hjust = 1) +
+  facet_wrap( ~ my.variable, ncol=2) +
+  xlim(c(-2,2))+
+  ylim(c(0,1)) +
+  theme_void() +
+  theme(strip.text.x = element_blank(), 
+        legend.position = "none")
+  
+# in a loop for all the transects
+my.variables1 <- c("S", "A")
+my.variables2 <- c("T", "OG", "N", "HP")
+
+for(i in 1:length(transects.names)){
+  # subset of the transect
+  test <- subset(toplot, toplot$site == transects.names[i])
+  # create upper plot: S, A
+  test1 <- test %>%
+     filter(my.variable %in% my.variables1)
+ 
+  plot1 <- ggplot(data = test1, aes(x=0, y = my.value)) + 
+      geom_bar(stat="identity",  width = 0.5, aes(fill = my.variable)) +
+    scale_fill_manual(values = c("darkblue", "lightblue")) +
+    geom_text(aes(label = round(label.value,1), x = 0.4, y = 0), 
+            size = 12, vjust = 0, hjust = 0, color = "black") +
+    geom_text(aes(label = as.character(my.variable)), x = -0.4, y = 0, 
+            size = 14, vjust = 0, hjust = 1, fontface = "bold") +
+    facet_wrap( ~ my.variable, ncol=2) +
+    xlim(c(-2,2))+
+    ylim(c(0,1)) +
+    theme_void() +
+    theme(strip.text.x = element_blank(), 
+        legend.position = "none")
+
+  # create lower plot: T, OG, N, HP
+  test2 <- test %>%
+     filter(my.variable %in% my.variables2)
+ 
+  plot2 <- ggplot(data = test2, aes(x=0, y = my.value)) + 
+        geom_bar(stat="identity",  width = 0.5, aes(fill = my.variable)) +
+        scale_fill_manual(values = c("darkgreen", "limegreen","grey30", "tomato4")) +
+        geom_text(aes(label = round(label.value,1), x = 0.4, y = 0), 
+                size = 10, vjust = 0, hjust = 0, color = "grey40") +
+        geom_text(aes(label = as.character(my.variable), color = my.variable), x = -0.4, y = 0, 
+                size = 12, vjust = 0, hjust = 1) +
+        scale_color_manual(values = c("darkgreen", "limegreen","grey30", "tomato4"))+
+        facet_wrap( ~ my.variable, ncol=2) +
+        xlim(c(-2,2))+
+        ylim(c(0,1)) +
+        theme_void() +
+        theme(strip.text.x = element_blank(), 
+              legend.position = "none")
+
+  # create white space
+  blank <- rectGrob(gp=gpar(col="white")) # make a white spacer grob
+
+  # put everything togheter and save
+  plot.full <- grid.arrange(plot1, blank, plot2, heights=c(0.5, 0.2, 1), nrow=3)  
+  ggsave(paste0(Plots_wd, "/", transects.names[i], "_variables_summary_lowres.png"), 
+       width = 6, height = 3, dpi = 300,
+       plot = plot.full)
+}
+```
+
+
+# Get diversity by transect: RAC 
+
+Rank abundance curves (RAC): A rank abundance curve or Whittaker plot displays relative species abundance. It can also be used to visualize species richness and species evenness. The curve is a 2D chart with relative abundance on the Y-axis and the abundance rank on the X-axis.
+
+```{r load data}
+# birds
+birds <- read.csv("./4_Processed_data/NEWBirds_abund_noexo_norare2_noaquatic_bykm.csv")
+birds$site <- as.factor(tolower(birds$site))
+str(birds)
+head(birds)
+ncol(birds)
+
+# we put site as row name instead of a column
+row.names(birds) <- birds$site
+birds.abund <- birds %>% 
+  select(-site)
+birds.abund
+```
+
+```{r get rac}
+# rank abundance for one site
+levels(birds$site)[1]
+# [1] "be10"
+
+rankabundance(x = birds.abund,  
+              y = birds, 
+              factor = "site", 
+              level = levels(birds$site)[1])
+
+# Do all the transects
+transects <- levels(birds$site)
+
+rankabund.list <- list()
+for (i in 1:length(transects)){
+  rankabund.list[[i]] <- cbind.data.frame(rankabundance(x = birds.abund, 
+                                                        y = birds, 
+                                                        factor = "site", 
+                                                        level = transects[i]), 
+                                          transect = transects[i])
+}
+names(rankabund.list) <- transects
+rankabund.list$be10
+rankabund.table <- do.call("rbind", rankabund.list)
+```
+
+```{r plot rac}
+# default plotting
+rankabunplot(rankabund.list$be10, scale = 'logabun', addit = FALSE, specnames = FALSE, 
+             col = "red", lwd = 2, ylim = c(0.5,100))
+
+
+# Plotting manually
+
+# ggplot all curves
+ggplot(data = rankabund.table, aes(x = rank, y = abundance, color = transect)) +
+  geom_line()
+
+# all plots together
+rank.curves <- ggplot(data = rankabund.table, aes(x = rank, y = abundance)) +
+  geom_line(col = "grey20", lwd = 2) +
+  facet_wrap(~transect, ncol = 5) + #, scales = "free_y") +
+  theme_bw() +
+  theme(panel.grid = element_blank(), 
+        axis.text = element_text(size = 14), 
+        axis.title = element_text(size = 16), 
+        strip.text.x = element_text(size= 14, face = "bold"))
+rank.curves
+
+# plots 1 by 1. Saved as a list
+plot_list = list()
+for (i in 1:length(transects)){
+my.data <- subset(rankabund.table, transect  == transects[i])
+p <- ggplot(data = my.data, aes(x = rank, y = abundance)) +
+    geom_line(col = "grey20", lwd = 2) +
+    scale_y_continuous("abundance", breaks = c(0,60), limits=c(0,61)) +
+    scale_x_continuous(breaks = c(0, 50), labels = c(0, 50), limits = c(0,51)) +
+    # ylim(c(0,60)) +
+    # xlim(c(0,45)) +
+    ggtitle("RAC") +
+    theme(panel.grid = element_blank(), 
+          panel.background = element_blank(),
+          axis.text = element_text(size = 40), 
+          axis.title = element_text(size = 40),
+          # axis.title = element_blank(),
+          axis.line = element_line("grey30", size = 1.5), 
+          plot.title = element_text(size = 50, hjust = 0.5 ))
+  print(p)
+  ggsave(paste0(Plots_wd, "/rac_plot_", transects[i], ".png"), 
+         width = 6, height = 6, dpi = 300)
+}
+```
+
+
+# Get transects functional diversity 
+community-level weighted means of trait values
+
+```{r get community weighted means of traits}
+traits.tmp <- read.csv("./4_Processed_data/NEWBirds_traits_noexo_norare2_noaquatic.csv")
+head(traits)
+head(birds)
+
+# select the used traits
+traits.birds <- traits.tmp %>%
+  mutate(log10.bodymass = log(bodymass.value,10)) %>% 
+  select(diet.5cat, migrant, log10.bodymass)
+
+rownames(traits.birds) <- traits.tmp$scientific2
+
+
+cwm.birds <- functcomp(as.matrix(traits.birds), as.matrix(birds.abund), CWM.type = "dom")
+
+write.csv(cwm.birds, "./4_Processed_data/Transects_community_weighted_means_traits.csv")
+
+```
+
+
+# Plot transects in the study area 
+
+### Packages
+```{r}
+library(raster)
+library(sf)
+library(tmap)
+library(RColorBrewer)
+```
+
+```{r load gis data}
+# berlin outside
+berlin.out <- read_sf(paste0(Data_wd, "/geodata/Berlin_border_3035.gpkg"), 
+                      crs = 3035)
+berlin.out <- st_transform(berlin.out, crs = 25833)
+
+grid.birds <- read_sf(paste0(Data_wd, "/geodata/birds_quadrants1x1km_3035.gpkg"), crs = 3035)
+grid.birds <- st_transform(grid.birds, crs = 25833)
+
+
+plot(st_geometry(berlin.out), main = "Berlin")
+plot(st_geometry(grid.birds), add = TRUE, col = "blue")
+
+# imperviousness rasters
+imperv.tmp <- raster(paste0(Data_wd, "/geodata/impervious_surface_20m_25833.tif"), 
+                     crs = 25833)
+```
+
+```{r plot study area map}
+imperv.crop <- mask(imperv.tmp, berlin.out)
+
+my.palette <- c("palegoldenrod", "sandybrown", "#660000")
+
+tmap_mode("plot")
+
+(imperv.map <- tm_shape(imperv.crop) +
+       tm_raster(palette = my.palette, title = "Impervious surface (%)") +
+
+  tm_shape(berlin.out) +
+  tm_borders("black", lwd = 2) +
+  tm_shape(grid.birds) +
+  tm_borders("white", lwd = 5) +
+  tm_shape(grid.birds) +
+  tm_borders("black", lwd = 2) +
+  tm_text("routcode_2", col = "black", size = 1,
+          remove.overlap = FALSE, 
+          bg.color = "palegoldenrod", bg.alpha = 0.5,
+          fontface = "bold",
+          just = "left", xmod = +0.6, ymod = +0.2) +
+  tm_layout(main.title = "study area", 
+            legend.position = c(0.75, 0.7),
+            legend.bg.color = "white", 
+            legend.frame = "black",
+            legend.text.size = 0.6,
+            legend.title.size = 1,
+            frame = FALSE) +
+  tm_compass(type = "arrow",
+             position = c(0.01, 0.1), 
+             size = 1.5) +
+  tm_scale_bar(size = 1, 
+               position = c("left", "bottom")) )
+
+
+tmap_save(tm = imperv.map, filename = paste0(Plots_wd, "/Map_study_area2.png"), width = NA, height = NA,
+          units = NA, dpi = 600)
+```

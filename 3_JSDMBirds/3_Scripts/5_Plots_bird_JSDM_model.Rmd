@@ -1,0 +1,1328 @@
+---
+title: "Plots_bird_JSDM"
+author: "Aimara Planillo"
+date: "12/10/2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Customized plots of Bird abundance responses : This scripts includes the code 
+used for creating the customized plots of the bird abundance JSDM 
+
+
+### Packages
+```{r}
+library(Hmsc)
+library(png)
+library(grid)
+library(ggplot2)
+library(reshape2)
+```
+
+### Workspace
+```{r}
+WorkDir <- getwd()
+Images_wd <- paste0(WorkDir, "/2_Raw_data/Images/")
+Gradients_wd <- paste0(WorkDir, "/5_Results/Bird_EnvGradients")
+Plots_wd <- paste0(WorkDir, "/5_Results/Plots_birds/")
+```
+
+
+# 1. Response of the community to environmental gradients
+
+We are going to plot the community response to environmental gradients, taking
+into account the interaction with prey abundance
+
+We are going to use three levels: 
+low = 135 (minimun value of the index), 
+mean = 200 (mean), 
+high = 365 (maximum value of the index)
+
+For Credible intervals, We are using the 75 CrI
+
+
+### Load data
+
+```{r load predicted gradients}
+prey.gradient.names <- c("lowprey", "meanprey", "highprey")
+
+## Load the prediction tables for the plots 
+toplot.noise.all <- read.csv(paste0(Gradients_wd, "/Toplot_noisexprey_sites.csv"))
+toplot.pop.all <- read.csv(paste0(Gradients_wd, "/Toplot_popxprey_sites.csv"))
+toplot.tree.all <- read.csv(paste0(Gradients_wd, "/Toplot_treexprey_sites.csv"))
+toplot.ogreen.all <- read.csv(paste0(Gradients_wd, "/Toplot_ogreenxprey_sites.csv"))
+```
+
+```{r load and prepare images}
+# Add images
+carabid <- readPNG(paste0(Images_wd, "/carabidae_black.png"))
+
+# get size
+r <- nrow(carabid) / ncol(carabid)  # size ratio
+s <- 3.5   # size
+
+# change colors
+carabid.grey <- carabid
+carabid.grey[,,1] <- 0.5    #  Red component
+carabid.grey[,,2] <- 0.5    #  Green component
+carabid.grey[,,3] <- 0.5    #  Blue 
+
+carabid.orange <- carabid
+carabid.orange[,,1] <- 0.9    #  Red 
+carabid.orange[,,2] <- 0.5    #  Green 
+carabid.orange[,,3] <- 0    #  Blue  
+
+carabid.green <- carabid
+carabid.green[,,1] <- 0    #  Red 
+carabid.green[,,2] <- 0.5    #  Green 
+carabid.green[,,3] <- 0    #  Blue  
+
+# plot the colored images
+plot(c(0,20), c(0,3.5), type = "n", xlab = "", ylab = "", asp=1)
+rasterImage(as.raster(carabid), 0, 0, 0+s/r, 0+s)
+rasterImage(as.raster(carabid.grey), 5, 0, 5+s/r, 0+s)
+rasterImage(as.raster(carabid.orange), 10, 0, 10+s/r, 0+s)
+rasterImage(as.raster(carabid.green), 15, 0, 15+s/r, 0+s)
+
+# transform into grob for adding to ggplot later
+g_carabid.grey <- rasterGrob(carabid.grey, interpolate = TRUE)
+g_carabid.orange <- rasterGrob(carabid.orange, interpolate = TRUE)
+g_carabid.green <- rasterGrob(carabid.green, interpolate = TRUE)
+```
+
+
+### Noise and prey gradient 
+
+```{r basic noise plot}
+noise.plot <- ggplot(data=toplot.noise.all, aes(x = noise, 
+                                                y = beta, 
+                                                group = as.factor(prey))) + 
+  geom_line(aes(color=as.factor(prey)), lwd = 1.5) +
+  geom_ribbon(aes(ymin=toplot.noise.all$low75, ymax=toplot.noise.all$high75, 
+                  # color = as.factor(prey), 
+                  color = NULL, fill = as.factor(prey)), 
+              alpha=0.1) +
+  scale_color_manual(values=c('#999999', '#FF7F0E', "#10A200"), 
+                     name = "Prey index", 
+                     labels = c("low", "medium", "high")) +
+  scale_fill_manual(values=c('#999999' , '#E69F00', "#10A200")) +
+  theme_bw() +
+  guides(color = guide_legend(order = 1),  
+         fill = FALSE) +
+  xlab("Noise level") +
+  ylab("Bird index") +
+  theme(legend.position = c(0.88,0.88),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 16, face = "bold"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_rect(color = "black"),
+        axis.title = element_text(face = "bold", size =18),
+        axis.text = element_text(size = 16, colour = "black"),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)), 
+        axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)), 
+        )
+```
+
+```{r fancy noise plot}
+# Add images
+final.noise.plot <- noise.plot + 
+  # xlim(c(20,66))+
+  # annotate(geom="text", x = 25, y = 160, label = "high \nprey abundance", 
+  #          color = "blue", fontface = "italic", size = 5, hjust = 0) +
+  # annotate("rect", xmin = 24, xmax = 35, ymin = 150, ymax = 170,
+  #           color = "blue", alpha = .2, fill = "sienna3") +
+  annotation_custom(g_carabid.green, 
+                    xmin = min(toplot.noise.all$noise) - 1, 
+                    xmax = (min(toplot.noise.all$noise)-1) + max(toplot.noise.all$noise)/9,
+                    ymin = 150, ymax = 168) +
+  annotation_custom(g_carabid.green, 
+                    xmin = min(toplot.noise.all$noise) + 1.8, 
+                    xmax = (min(toplot.noise.all$noise)+1.8) + max(toplot.noise.all$noise)/9,
+                    ymin = 143, ymax = 161) +
+  annotation_custom(g_carabid.green, 
+                    xmin = min(toplot.noise.all$noise) +1.8, 
+                    xmax = (min(toplot.noise.all$noise)+1.8) + max(toplot.noise.all$noise)/9,
+                    ymin = 155, ymax = 173) +
+  annotation_custom(g_carabid.orange, 
+                     xmin = min(toplot.noise.all$noise) - 1, 
+                    xmax = (min(toplot.noise.all$noise)-1) + max(toplot.noise.all$noise)/9,
+                     ymin = 81, ymax = 99) +
+  annotation_custom(g_carabid.orange, 
+                     xmin = min(toplot.noise.all$noise) + 1.8, 
+                    xmax = (min(toplot.noise.all$noise)+1.8) + max(toplot.noise.all$noise)/9,
+                     ymin = 80, ymax = 98) +
+    annotation_custom(g_carabid.grey, 
+                     xmin = min(toplot.noise.all$noise) - 1, 
+                    xmax = (min(toplot.noise.all$noise)-1) + max(toplot.noise.all$noise)/9,
+                     ymin = 56, ymax = 74)
+
+final.noise.plot
+# ggsave(paste0(Plots_wd, "/Plot_birds_noisexprey_gradient.png"), plot = final.noise.plot)
+```
+
+
+### Human population and prey gradient
+
+```{r human pop plot}
+pop.plot <- ggplot(data=toplot.pop.all, aes(x=pop, y=beta, group = as.factor(prey))) + 
+  geom_line(aes(color=as.factor(prey)), lwd = 1.5) +
+  geom_ribbon(aes(ymin=pmax(min(toplot.pop.all$beta),toplot.pop.all$low75), ymax=toplot.pop.all$high75, 
+                  # color = as.factor(prey), 
+                  color = NULL, fill = as.factor(prey)), 
+              alpha=0.1) +
+  scale_color_manual(values=c('#999999', '#FF7F0E', "#10A200"), 
+                     name = "Prey index", 
+                     labels = c("low", "medium", "high")) +
+  scale_fill_manual(values=c('#999999' , '#E69F00',  "#10A200")) +
+  theme_bw() +
+  guides(color = guide_legend(order = 1),  
+         fill = FALSE) +
+  xlab("Human population density") +
+  ylab("Bird index") +
+  theme(legend.position = c(0.88,0.88),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 16, face = "bold"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_rect(color = "black"),
+        axis.title = element_text(face = "bold", size =18),
+        axis.text = element_text(size = 16, colour = "black"),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)), 
+        axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)), 
+        )
+
+# Add images
+pop.plot +
+ annotation_custom(g_carabid.green, 
+                     xmin = min(toplot.pop.all$pop), xmax = max(toplot.pop.all$pop)/9,
+                     ymin = 112, ymax = 127) +
+  annotation_custom(g_carabid.grey, 
+                     xmin = min(toplot.pop.all$pop), xmax = max(toplot.pop.all$pop)/9,
+                     ymin = 75, ymax = 90) +
+  annotation_custom(g_carabid.orange,
+                     xmin = min(toplot.pop.all$pop), xmax = max(toplot.pop.all$pop)/9,
+                     ymin = 59, ymax = 74)
+
+
+final.pop.plot <- pop.plot + 
+  annotation_custom(g_carabid.green, 
+                    xmin = min(toplot.pop.all$pop) - 3, 
+                    xmax = (min(toplot.pop.all$pop)-3) + max(toplot.pop.all$pop)/9,
+                    ymin = 112, ymax = 128) +
+  annotation_custom(g_carabid.green, 
+                    xmin = min(toplot.pop.all$pop) + 15, 
+                    xmax = (min(toplot.pop.all$pop)+15) + max(toplot.pop.all$pop)/9,
+                    ymin = 105, ymax = 121) +
+  annotation_custom(g_carabid.green, 
+                    xmin = min(toplot.pop.all$pop) +15, 
+                    xmax = (min(toplot.pop.all$pop)+15) + max(toplot.pop.all$pop)/9,
+                    ymin = 117, ymax = 133) +
+  annotation_custom(g_carabid.orange, 
+                     xmin = min(toplot.pop.all$pop) - 1, 
+                    xmax = (min(toplot.pop.all$pop)-1) + max(toplot.pop.all$pop)/9,
+                     ymin = 75, ymax = 91) +
+  annotation_custom(g_carabid.orange, 
+                     xmin = min(toplot.pop.all$pop) + 15, 
+                    xmax = (min(toplot.pop.all$pop)+15) + max(toplot.pop.all$pop)/9,
+                     ymin = 72, ymax = 88) +
+    annotation_custom(g_carabid.grey, 
+                     xmin = min(toplot.pop.all$pop) - 1, 
+                    xmax = (min(toplot.pop.all$pop)-1) + max(toplot.pop.all$pop)/9,
+                     ymin = 40, ymax = 56)
+
+final.pop.plot
+# ggsave(paste0(Plots_wd, "/Plot_birds_popxprey_gradient.png"), plot = final.pop.plot)
+```
+
+### Tree cover and prey gradient
+
+```{r tree cover plot}
+tree.plot <- ggplot(data=toplot.tree.all, aes(x=tree, y=beta, group = as.factor(prey))) + 
+  geom_line(aes(color=as.factor(prey)), lwd = 1.5) +
+  geom_ribbon(aes(ymin=pmax(min(beta),low75), ymax=high75, 
+                  # color = as.factor(prey), 
+                  color = NULL, fill = as.factor(prey)), 
+              alpha=0.1) +
+  scale_color_manual(values=c('#999999', '#FF7F0E', "#10A200"), 
+                     name = "Prey index", 
+                     labels = c("low", "medium", "high")) +
+  scale_fill_manual(values=c('#999999', '#E69F00',"#10A200")) +
+  theme_bw() +
+  guides(color = guide_legend(order = 1),  
+         fill = FALSE) +
+  xlab("Tree cover") +
+  ylab("Bird index") +
+  theme(legend.position = c(0.88,0.88),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 16, face = "bold"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_rect(color = "black"),
+        axis.title = element_text(face = "bold", size =18),
+        axis.text = element_text(size = 16, colour = "black"),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)), 
+        axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)), 
+        )
+
+# Add images
+final.tree.plot <- tree.plot + 
+  annotation_custom(g_carabid.green, 
+                     # xmin = min(toplot.tree.all$tree), xmax = max(toplot.tree.all$tree)/9,
+                    xmin = max(toplot.tree.all$tree) - max(toplot.tree.all$tree)/9, 
+                    xmax = max(toplot.tree.all$tree),
+                     ymin = 127, ymax = 142) +
+  annotation_custom(g_carabid.green, 
+                    xmin = max(toplot.tree.all$tree) - max(toplot.tree.all$tree)/9, 
+                    xmax = max(toplot.tree.all$tree),
+                     ymin = 115, ymax = 130) +
+  annotation_custom(g_carabid.green, 
+                    xmin = (max(toplot.tree.all$tree) - max(toplot.tree.all$tree)/9)-5, 
+                    xmax = max(toplot.tree.all$tree)-5,
+                     ymin = 122, ymax = 137) +
+  annotation_custom(g_carabid.orange,  
+                     xmin = max(toplot.tree.all$tree) - max(toplot.tree.all$tree)/9, 
+                    xmax = max(toplot.tree.all$tree),
+                     ymin = 82, ymax = 97) +
+  annotation_custom(g_carabid.orange,  
+                     xmin = (max(toplot.tree.all$tree) - max(toplot.tree.all$tree)/9)-5, 
+                    xmax = max(toplot.tree.all$tree)-5,
+                     ymin = 80, ymax = 95) +
+  annotation_custom(g_carabid.grey,
+                     xmin = max(toplot.tree.all$tree) - max(toplot.tree.all$tree)/9, 
+                    xmax = max(toplot.tree.all$tree),
+                     ymin = 54, ymax = 69)
+
+final.tree.plot
+# ggsave(paste0(Plots_wd, "/Plot_birds_tree_prey_interaction.png"), plot = final.tree.plot)
+```
+
+
+### Open green and prey gradient
+
+```{r open green plot}
+colnames(toplot.ogreen.all)[1] <- "ogreen"
+
+open.green.plot <- ggplot(data=toplot.ogreen.all, aes(x=ogreen, y=beta, group = as.factor(prey))) + 
+  geom_line(aes(color=as.factor(prey)), lwd = 1.5) +
+  geom_ribbon(aes(ymin=low75, ymax=high75, 
+                  # ymin=pmax(min(beta),low75)
+                  # color = as.factor(prey), 
+                  color = NULL, fill = as.factor(prey)), 
+              alpha=0.1) +
+  scale_color_manual(values=c('#999999','#FF7F0E',"#10A200"), 
+                     name = "Prey index", 
+                     labels = c("low", "medium", "high")) +
+  scale_fill_manual(values=c('#999999','#E69F00',"#10A200")) +
+  theme_bw() +
+  guides(color = guide_legend(order = 1),  
+         fill = FALSE) +
+  xlab("Open green area") +
+  ylab("Bird index") +
+  theme(legend.position = c(0.88,0.88),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 16, face = "bold"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_rect(color = "black"),
+        axis.title = element_text(face = "bold", size =18),
+        axis.text = element_text(size = 16, colour = "black"),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)), 
+        axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)), 
+        )
+
+# Add images
+open.green.plot + 
+  # annotate(geom="text", x = 25, y = 160, label = "high \nprey abundance", 
+  #          color = "blue", fontface = "italic", size = 5, hjust = 0) +
+  # annotate("rect", xmin = 24, xmax = 35, ymin = 150, ymax = 170,
+  #           color = "blue", alpha = .2, fill = "sienna3") +
+  annotation_custom(g_carabid.blue, 
+                     xmin = 0, xmax = 0.12,
+                     ymin = 76, ymax = 106) +
+  annotation_custom(g_carabid.grey, 
+                     xmin = 0, xmax = 0.09,
+                     ymin = 54, ymax = 79) +
+  annotation_custom(g_carabid.orange,  
+                     xmin = 0, xmax = 0.07,
+                     ymin = 36, ymax = 46)
+
+
+final.open.green.plot <-  open.green.plot +
+  annotation_custom(g_carabid.green, 
+                     xmin = min(toplot.ogreen.all$ogreen), 
+                    xmax = max(toplot.ogreen.all$ogreen)/10,
+                     ymin = 82, ymax = 95) +
+    annotation_custom(g_carabid.green, 
+                     xmin = min(toplot.ogreen.all$ogreen), 
+                    xmax = max(toplot.ogreen.all$ogreen)/10,
+                     ymin = 92, ymax = 105) +
+  annotation_custom(g_carabid.green, 
+                     xmin = min(toplot.ogreen.all$ogreen) +0.07, 
+                    xmax = (max(toplot.ogreen.all$ogreen)/10)+0.07,
+                     ymin = 86, ymax = 99) +
+  annotation_custom(g_carabid.orange, 
+                     xmin = min(toplot.ogreen.all$ogreen), 
+                    xmax = max(toplot.ogreen.all$ogreen)/10,
+                     ymin = 59, ymax = 72) +
+  annotation_custom(g_carabid.orange, 
+                    xmin = min(toplot.ogreen.all$ogreen) + 0.06, 
+                    xmax = (max(toplot.ogreen.all$ogreen)/10)+0.06,
+                     ymin = 62, ymax = 75) +
+  annotation_custom(g_carabid.grey, 
+                     xmin = min(toplot.ogreen.all$ogreen), xmax = max(toplot.ogreen.all$ogreen)/10,
+                     ymin = 35, ymax = 48)
+
+final.open.green.plot
+# ggsave(paste0(Plots_wd, "/Plot_birds_ogreen_prey_interaction.png"), plot = final.open.green.plot)
+```
+
+
+
+
+
+# 2. Variance partitioning plot
+
+We are going to plot manually, so we can plot species names.
+From this, we extrat the relevant information and create the plot with ggplot
+
+```{r load data}
+# Varpart data
+VP.vals <- read.csv("./5_Results/Bird_Model/Varpart_values.csv", row.names = 1)
+ncol(VP.vals)
+mean.varpart <- rowSums(VP.vals)/ncol(VP.vals)
+mean.varpart
+
+# set species names
+bird.sp <- colnames(VP.vals)
+bird.sp1 <- bird.sp
+for (i in 1:length(bird.sp1)){
+  names1 <- strsplit(bird.sp, "_")[[i]][1] 
+  names2 <- strsplit(bird.sp, "_")[[i]][2] 
+  bird.sp1[i] <- paste(names1, names2, sep=" ")
+}
+head(bird.sp1)
+
+colnames(VP.vals) <- bird.sp1
+VP.vals$VariableType <- row.names(VP.vals)
+
+# Format the dataframe 
+VP.toplot<- melt(VP.vals, id.vars = "VariableType")
+
+# Give the order (top down) to the levels of the factor to plot
+VP.toplot$VariableType <- factor(VP.toplot$VariableType, levels = c("Random: site", "interactions", "prey",  "nature", "urban"))
+
+head(VP.toplot)
+tail(VP.toplot)
+```
+
+```{r plot in alphabetical order}
+## Plot in Alphabetical order
+varpartplot <- ggplot(VP.toplot, aes(x = variable, y = value, fill=VariableType)) +
+  geom_bar(stat='identity', colour = "black") +
+  scale_fill_manual(values=c("lightyellow", "brown", "darkorange", "darkgreen", "grey"), 
+                    name = "Variable type", 
+                    labels=c(paste0("Random factor: Site\n(mean = ", 
+                                       round(mean.varpart[5],2), ")"),
+                                paste0("Interactions with prey\n(mean = ", 
+                                       round(mean.varpart[4], 2), ")"), 
+                                paste0("Prey abundance\n(mean = ", 
+                                       round(mean.varpart[3], 2), ")"),
+                                paste0("Nature-like variables\n(mean = ", 
+                                       round(mean.varpart[1], 2), ")"),
+                               paste0("Disturbance variables\n(mean = ", 
+                                       round(mean.varpart[2], 2), ")"))) +
+  labs(#title = "Variance Partitioning", 
+       x = "Bird Species", 
+       y = "Variance partitioning (%)", col = "black") +
+  scale_y_continuous(limits = c(0,1.01), expand = c(0, 0)) +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0, 
+                                   face="italic", size=7, colour = "black"),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(hjust = 0.5, vjust = 1.5),
+        # legend.position = "right", 
+        # legend.title = element_blank(), 
+        legend.key.height = unit(1.5, "lines"),
+        # legend.key.width = unit(1.5, "lines"), 
+        # legend.spacing.y = unit(-3, 'cm'),
+        # legend.text=element_text(size=10))
+  )
+varpartplot
+```
+
+```{r plot in relation to importance of urban variables}
+## Plot the species ordered by the importance of urban variables
+VP.ordered <- VP.vals %>% 
+  dplyr::select(-VariableType)
+VP.ordered <- VP.ordered[,order(VP.ordered[2,], decreasing = TRUE)]
+
+VP.urban <- as.data.frame(VP.ordered)
+mean.varpart2 <- rowSums(VP.urban)/ncol(VP.urban)
+
+# Give the order (top down) to the levels of the factor to plot
+VP.urban$VariableType <- row.names(VP.urban)
+VP.urban$VariableType <- factor(VP.urban$VariableType, 
+                                    levels = c("Random: site", "interactions", "prey",  "nature", "urban"))
+
+# Transform data format
+VP.toplot.urban <- melt(VP.urban, id.vars = "VariableType")
+head(VP.toplot.urban)
+
+varpartplot.urban <- ggplot(VP.toplot.urban, aes(x = variable, y = value, fill=VariableType)) +
+  geom_bar(stat='identity', colour = "black") +
+  scale_fill_manual(values=c("lightyellow", "brown", "darkorange", "darkgreen", "grey"), 
+                    # name = "Variable type", 
+                    name = NULL, 
+                    labels=c(paste0("Random factor: Site (mean = ", 
+                                       round(mean.varpart[5],2), ")"),
+                                paste0("Interactions with prey (mean = ", 
+                                       round(mean.varpart[4], 2), ")"), 
+                                paste0("Prey abundance (mean = ", 
+                                       round(mean.varpart[3], 2), ")"),
+                                paste0("Nature-live variables (mean = ", 
+                                       round(mean.varpart[1], 2), ")"),
+                               paste0("Disturbance variables (mean = ", 
+                                       round(mean.varpart[2], 2), ")"))) +
+  labs(x = "Bird Species", 
+       y = "Variance partitioning (%)", col = "black") +
+  scale_y_continuous(limits = c(0,1.01), expand = c(0, 0)) +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0, 
+                                   face="italic", size=8, colour = "black"),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(hjust = 0.5, vjust = 1.5),
+        legend.position = c(0.87,0.7),
+        # legend.position = "top",
+        # legend.direction = "horizontal",
+        legend.background = element_rect(colour = "black"),
+        # legend.title = element_blank(), 
+        # legend.key.height = unit(1.5, "lines"),
+        # legend.key.width = unit(1.5, "lines"), 
+        # legend.spacing.y = unit(-3, 'cm'),
+        legend.text=element_text(size=9)
+  )
+ 
+varpartplot.urban
+```
+
+```{r plot using 3 groups: urban, woodland, nature}
+# load the previously stablished groups
+birds.group <- read.csv("./4_Processed_data/species_groups_responses.csv")
+birds.group
+
+# Arrange them based on the groups
+birds.group.ordered <- birds.group %>%
+  arrange(factor(group, levels = c("Group1", "Group3", "Group2")), species) 
+
+my.species <- factor(birds.group.ordered$species, levels = birds.group.ordered$species)
+
+## Get short names for the VP
+bird.species.names <- data.frame(species = bird.sp1)
+bird.species.names$short <- as.character(bird.species.names$species)
+for (i in 1:length(bird.species.names$short)){
+  names1 <- strsplit(bird.species.names$short, '')[[i]][1]
+  names2 <- strsplit(bird.species.names$short, " ")[[i]][2] 
+  bird.species.names$short[i] <- paste(names1, names2, sep=".")
+}
+
+bird.species.names
+
+## Reorder the species in the varpart according to the groups
+# Extract the values for the manual plot
+VP.groups <- VP.vals
+
+mean.varpart4 <- rowSums(VP.groups[1:66])/ncol(VP.groups[1:66])
+
+# Give the order (top down) to the levels of the factor to plot
+VP.groups$VariableType <- factor(VP.groups$VariableType, levels = c("Random: site", "interactions", "prey",  "nature", "urban"))
+
+# Transform data format
+VP.toplot.groups <- melt(VP.groups, id.vars = "VariableType")
+head(VP.toplot.groups)
+
+## Get the colours
+birds.group.color <- birds.group.ordered %>%
+  mutate(color = case_when(
+    group == "Group1" ~ "grey20",
+    group == "Group3" ~ "darkgreen",
+    group == "Group3a" ~ "darkgreen",
+    TRUE ~ "#FF6000"
+  ))
+
+## Plot
+varpartplot.order.group <- ggplot(VP.toplot.groups, aes(x = variable, y = value, fill=VariableType)) +
+  geom_bar(stat='identity', colour = "black") +
+   scale_fill_manual(values=c("lightyellow", "brown", "darkorange", "darkgreen", "grey"), 
+                    name = "Variable type", 
+                    labels=c(paste0("Random factor: Site\n(mean = ", 
+                                       round(mean.varpart[5],2), ")"),
+                                paste0("Interactions with prey\n(mean = ", 
+                                       round(mean.varpart[4], 2), ")"), 
+                                paste0("Prey abundance\n(mean = ", 
+                                       round(mean.varpart[3], 2), ")"),
+                                paste0("Nature-like variables\n(mean = ", 
+                                       round(mean.varpart[1], 2), ")"),
+                               paste0("Disturbance variables\n(mean = ", 
+                                       round(mean.varpart[2], 2), ")"))) +
+  labs(#title = "Variance Partitioning", 
+       x = "Bird Species", 
+       y = "Variance partitioning (%)", col = "black") +
+  scale_y_continuous(limits = c(0,1.01), expand = c(0, 0)) +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0, 
+                                   face="italic", size=7, colour = birds.group.color$color),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(hjust = 0.5, vjust = 1.5),
+        legend.key.height = unit(1.5, "lines")
+  )
+ 
+varpartplot.order.group
+
+# ggsave("Varpart_birds_group_myplot.png", plot = varpartplot.order.group, 
+#        dpi = 600, width = 10, height = 4.9)
+```
+
+
+# 3. Species Associations plot
+
+Plot the species associations categorizing the birds in groups based on their environmental response
+We use a Hierarchical edge bundling plot
+
+To create a bundling graph we need a hierarchy that is going to be used for the dendrogram. 
+We add higher categories to our species, grouping them by env response, that we will use later for plotting
+
+We also need to create the edges: data frame giving the hierarchical structure of the species,
+grouped by species group
+
+
+### Packages
+```{r packages}
+library(ggraph)
+library(igraph)
+library(dplyr)
+library(grid)
+library(png)
+library(sf)
+```
+
+
+```{r load data}
+# Bird assoc
+birds.assoc <- read.csv("./5_Results/Bird_model/Birds_associations.csv")
+head(birds.assoc)
+
+# Bird groups
+birds.group <- read.csv("./4_Processed_data/species_groups_responses.csv")
+birds.group$group <- as.factor(birds.group$group)
+# we change the group names for plotting
+levels(birds.group$group) <- c(levels(birds.group$group), "Group4")
+birds.group$group[birds.group$group== "Group2"] <- "Group4" 
+birds.group$group <- droplevels(birds.group$group)
+birds.group <- birds.group[order(birds.group$species),]
+birds.group
+nrow(birds.group)
+
+# Traits data
+Trdata.tmp <- read.csv("./4_Processed_data/NEWBirds_traits_noexo_norare2_noaquatic.csv")
+Trdata <- Trdata.tmp %>%
+  dplyr::select(scientific = scientific, 
+         diet = diet.5cat, 
+         migrant = migrant, 
+         body.mass = bodymass.value)
+nrow(Trdata)
+
+## Get sp names for the plots
+# species in bird associations
+birds.assoc$sp1 <- as.character(birds.assoc$species1)
+for (i in 1:length(birds.assoc$sp1)){
+  names1 <- strsplit(birds.assoc$sp1, '')[[i]][1]
+  names2 <- strsplit(birds.assoc$sp1, "_")[[i]][2] 
+  birds.assoc$sp1[i] <- paste(names1, names2, sep=".")
+}
+  
+birds.assoc$sp2 <- as.character(birds.assoc$species2)
+for (i in 1:length(birds.assoc$sp2)){
+  names1 <- strsplit(birds.assoc$sp2, '')[[i]][1]
+  names2 <- strsplit(birds.assoc$sp2, "_")[[i]][2] 
+  birds.assoc$sp2[i] <- paste(names1, names2, sep=".")
+}
+  
+head(birds.assoc, 20)  
+
+# sp in traits
+Trdata$species <- as.character(Trdata$scientific)
+for (i in 1:length(Trdata$species)){
+  names1 <- strsplit(Trdata$species, '')[[i]][1]
+  names2 <- strsplit(Trdata$species, " ")[[i]][2] 
+  Trdata$species[i] <- paste(names1, names2, sep=".")
+}
+head(Trdata)
+
+# Select association that are significant in the 95% CI
+birds.corr95 <- birds.assoc %>%
+  filter(support < 0.025 | support > 0.975) %>%
+  filter(species1 != species2) %>%
+  dplyr::select(from = sp1, to = sp2, mean = mean, support = support) %>%
+  mutate(correl = ifelse(mean < 0, "neg", "pos"))
+
+nrow(birds.corr95)
+head(birds.corr95)
+```
+
+```{r prepare hierarchical edge bundling plot}
+# groups
+d1 <- data.frame(from="origin", to=levels(birds.group$group))
+
+# Then we assign the species to the groups
+d2 <- data.frame(from=birds.group$group, to=birds.group$species)
+edges <- rbind(d1, d2)
+nrow(edges)
+
+## prepare nodes
+#We use the number of sites that the species was detected for the size of the dots
+vertices <- data.frame(name = unique(c(as.character(edges$from), as.character(edges$to))))
+nrow(vertices)
+
+vertices$size <- c(rep(NA, 4), birds.group$nsites)
+vertices$group = edges$from[match( vertices$name, edges$to )]
+head(vertices, 10)
+
+# Reorder the data following the order we are interested in for representation:
+# so all the species in the same group appear together
+edges.ord <- edges[order(edges$from),]
+vertices.ord <- vertices[order(vertices$group,vertices$name),]
+head(vertices.ord, 10)
+
+## calculate the ANGLE of the labels for plotting
+vertices.ord$id=NA
+myleaves <- which(is.na(match(vertices.ord$name, edges.ord$from))) # Select the rows with the final species, not the groups
+nleaves <- length(myleaves) # This should be the number of species
+vertices.ord$id[myleaves] <- seq(1:nleaves)
+
+# First angle to calculate horizontal adjustment
+vertices.ord$angle <- 90 - 360*vertices.ord$id/nleaves
+
+# calculate the alignment of labels: right or left
+# If I am on the left part of the plot, my labels have currently an angle < -90
+vertices.ord$hjust<-ifelse( vertices.ord$angle < -90, 1, 0)
+
+# flip angle BY to make them readable
+vertices.ord$angle<-ifelse(vertices.ord$angle < -90, vertices.ord$angle+180, vertices.ord$angle)
+
+head(vertices.ord, 10)
+tail(vertices.ord, 10)
+```
+
+```{r create graph object and plot}
+# give data graph format
+mygraph <- graph_from_data_frame(d=edges.ord, vertices=vertices.ord)
+
+# The connection object must refer to the ids of the leaves:
+from <- match(birds.corr95$from, vertices.ord$name)
+to <- match(birds.corr95$to, vertices.ord$name)
+
+
+# we transform the correlations into positive or negative to better plot
+connections.birds <- birds.corr95 %>%
+  mutate (correlation = ifelse(mean > 0, "positive", "negative"))
+connections.birds
+
+# load images
+bird1 <- readPNG(paste0(Images_wd, "/sparrow_darkgray.png"))
+g_bird1 <- rasterGrob(bird1, interpolate = TRUE)
+
+bird2 <- readPNG(paste0(Images_wd, "/bird_silhouette1_darkgray.png"))
+g_bird2 <- rasterGrob(bird2, interpolate = TRUE)
+
+urban <- readPNG(paste0(Images_wd, "/urban_gray.png"))
+g_urban <- rasterGrob(urban, interpolate = TRUE)
+ 
+nature <- readPNG(paste0(Images_wd, "/opengreen_green.png"))
+g_nature <- rasterGrob(nature, interpolate = TRUE)
+ 
+tree <- readPNG(paste0(Images_wd, "/trees_blue.png"))
+g_tree <- rasterGrob(tree, interpolate = TRUE)
+
+
+# basic plot
+my.plot <- ggraph(mygraph, layout = 'dendrogram', circular = TRUE) +
+  geom_conn_bundle(data = get_con(from = from, to = to, values = connections.birds$correlation), 
+                   alpha=0.2, width=1.2, tension = 0.7, aes(colour=factor(values)), 
+                   show.legend = FALSE) +
+  geom_node_text(aes(x = x*1.2, y=y*1.2, filter = leaf, label=name, angle = angle, hjust=hjust, colour=group), size=3.5, alpha=1) +
+  geom_node_point(aes(filter = leaf, x = x*1.07, y=y*1.07, colour=group, size=size, alpha=0.5)) +  
+  expand_limits(x = c(-2, 2.5), y = c(-2, 2)) +
+  # change edge color
+  scale_edge_colour_manual(values = "midnightblue", # there are only positive associations #lightsteelblue #firebrick4
+                           guide = guide_legend(override.aes = list(linetype = "solid", 
+                                                                    colour = "grey50")),
+                           name = "Association") +
+  scale_edge_linetype("pointed") +
+  # label color
+  # scale_color_manual(values = c("grey20", "limegreen", "limegreen", "lightseagreen", "steelblue")) +
+  scale_color_manual(values = c("grey20", "darkgreen", "#FF6000")) +
+    # scale_color_manual(values = c("#d8b365", "#f5f5f5", "#5ab4ac")) + 
+  # label size
+  scale_size_continuous(range = c(0.2,8),
+                        breaks = c(5, 10, 20),
+                        name = "Number of sites") +
+  # labs(title="Species association network", caption="Source: simulated bird JSDM") +
+  guides(size = guide_legend(order = 2), 
+         # edge_colour = guide_legend (order = 1),
+         colour = FALSE,
+         alpha = FALSE) +
+  # change theme  
+  theme_minimal() +
+  theme(legend.position = c(0.88, 0.2), 
+        legend.background = element_rect(fill ="#F2F2F2", colour = "grey20"), 
+        legend.title = element_text(size = 10), 
+        legend.text = element_text(size = 8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.title = element_blank(),
+        axis.text = element_blank(), 
+        plot.background=element_blank(), 
+        panel.background = element_blank())
+
+my.plot
+# Add labels and pictures for diet categories
+my.plot.labels <- my.plot +
+  # add text
+# my.plot +
+  annotate(geom="text", x=1.6, y=1.7, label="Group 1: \nUrban birds",
+           color="grey20", fontface = "bold", size = 4) +
+  # add box around text
+  annotate("rect", xmin = 1.2, xmax = 2, ymin = 1.45, ymax = 1.9,
+           color = "grey20", alpha = .2, fill = "grey20") +
+  annotate(geom="text", x=-2.3, y=1, label="Group 2: \nWoodland birds",
+           color="#FF6000", fontface = "bold", size = 4) +
+  annotate("rect", xmin = -2.8, xmax = -1.75, ymin = 0.8, ymax = 1.2,
+           color = "#FF6000", alpha = .2, fill = "#FF6000") +
+  annotate(geom="text", x=0, y=-2, label="Group 3: \nNatural areas",
+           color="darkgreen", fontface = "bold", size = 4) +
+  annotate("rect", xmin = -0.5, xmax = 0.5, ymin = -2.2, ymax = -1.8,
+           color = "darkgreen", alpha = .2, fill = "darkgreen") 
+  
+# add images
+final.plot <- my.plot.labels +
+  annotation_custom(g_urban,
+                    xmin = 1.2, xmax = 1.55,
+                    ymin = 1.55, ymax = 2.5) +
+  annotation_custom(g_tree,
+                    xmin = -3, xmax = -1.5,
+                    ymin = 0.3, ymax = 0.7) +
+  annotation_custom(g_nature,
+                    xmin = -0.8, xmax = -1.5,
+                    ymin = -1.6, ymax = -2.3) +
+  annotation_custom(g_bird1,
+                    xmin = 2.8, xmax = 2,
+                    ymin = 0.2, ymax = 1) +
+  annotation_custom(g_bird2, 
+                    xmin = 1.5, xmax = 3,
+                    ymin = -1.2, ymax = -0.2) 
+
+  final.plot
+
+# ggsave(paste0(Plots_wd, "/Plot_associations_birds_bundle_groups_nsites_light2.png"), plot = final.plot)
+```
+
+
+# 4. Predicting bird community in Berlin 
+
+We are going to use **100 m resolution** to predict total abundance and 
+species richness in the study area (Berlin), using the JSDM model of birds 
+developed previously.
+
+First we need to predict birds in the desired locations. Thus, we previously build a grid data with information for all the cells in a 100m resolution raster for all the environmental variables. These variables have been centered and scaled using the same parameters that were used in the dataset for the model (mean and sd). 
+
+We also need to extract information about the abundance of invertebrates, 
+that comes from predictions on invertebrate abundance.
+We start by doing this and adding this information to the environmental variables
+
+For the process we follow these steps:
+1. Load the JSDM model that we'll use for prediction
+2. Load the dataframe that contains the environmental variables at 100m resolution grid with spatial coordinates
+3. Load the invertebrate predictions and sum them, as the sum was used in the original model
+4. Divide the new environmental data into subsets to parallelize the predictions, or do it in "small" groups.
+because this process in very computationally demanding. 
+5. Run the predictions and extract total abundance and species richness for each grid cell
+6. Extract the information for the species of interest. 
+7. Create an empty raster of the same resolution and extend of environmental values: 100m, Berlin.
+8. Paste the predicted values in the new raster using the coordinates from the original grid.
+9. Plot the maps.
+
+### Packages
+```{r}
+library(Hmsc)
+library(dplyr) # rearrange data
+library(dismo) # subset data
+library(ggplot2)
+library(sf)
+library(tmap)
+library(viridis)
+```
+
+### Workspace
+```{r}
+WorkDir <- getwd()
+Gis_wd <- file.path(WorkDir, "2_Raw_data/geodata")
+Pred_wd <- file.path(WorkDir, "2_Raw_data/topredict_Berlin")
+Model_wd <- file.path(WorkDir, "5_Results/Bird_model")
+```
+
+
+```{r load data}
+## load the model
+filename <- file.path(Model_wd, paste0("/model_birds_3sites_perkm.rds"))
+m <- readRDS(filename)
+
+## Load environmental data
+m$XFormula # env data need to have the same names as in model
+
+grid.topredict.100mres <- read.csv(paste0(Pred_wd, "/grid_topredict_100mres.csv"))
+head(grid.topredict.100mres)
+
+# select the data for the bird model
+grid.birds.100mres <- grid.topredict.100mres %>%
+  dplyr::select(x = x_100m, y = y_100m, 
+                tree.100m = tree_cover_100m, 
+                open.green100m = open_green_100m,
+                noise.100m = noise_100m, 
+                pop.100m = pop.pred100_100m)
+head(grid.birds.100mres)
+nrow(grid.birds.100mres)
+
+## Load prey data
+carabids.preds <- read.csv(paste0(Pred_wd,  "/Predict_Berlin_100m_carabids_3sites.csv"))
+grasshop.preds <- read.csv(paste0(Pred_wd, "/Predict_Berlin_100m_grasshop_3sites.csv"))
+spiders.preds <- read.csv(paste0(Pred_wd, "/Predict_Berlin_100m_spiders_3sites.csv"))
+
+nrow(carabids.preds); nrow(grasshop.preds); nrow(spiders.preds)
+
+# put data together into one data frame
+carabids.abupred <- carabids.preds %>%
+  dplyr::select(x, y, carabids.pred.abu)
+grasshop.abupred <- grasshop.preds %>%
+  dplyr::select(x, y, grasshop.pred.abu)
+spiders.abupred <- spiders.preds %>%
+  dplyr::select(x, y, spiders.pred.abu)
+
+head(carabids.abupred)
+head(grasshop.abupred)
+head(spiders.abupred)
+
+# we need to match the records by x y coordinates
+prey.tmp <- merge(carabids.abupred, grasshop.abupred, by=c("x","y")) 
+head(prey.tmp, 1)
+nrow(prey.tmp)
+prey  <- merge(prey.tmp, spiders.abupred, by= c("x", "y"))
+nrow(prey)
+
+# add the sum
+head(prey)
+prey <- prey %>%
+  mutate(prey.abu = carabids.pred.abu+grasshop.pred.abu+spiders.pred.abu)
+
+## We put together environment and preys
+covariates <- merge(prey, grid.birds.100mres, by = c("x", "y"))
+head(covariates)
+nrow(covariates)
+covariates[is.na(covariates),]
+# There are many NA in the data, but they are outside the area of interest, so we remove then to improve code eficiency
+
+# Remove NAs
+grid.covariates <- covariates[complete.cases(covariates), ]
+head(grid.covariates)
+nrow(grid.covariates)
+```
+
+### Subset data
+As predicting for whole Berlin takes a long time and uses a lot of computacional power, we divide the dataset into smaller datasets for the prediction. We do the prediction for each of these subsets and then, we paste together the results, getting the map of the full city.
+
+Divide the data into groups of 1000 rows so the prediction will use less memory, doing one group at a time
+```{r subset data}
+nrow(grid.covariates)
+# [1] 90568
+
+# Assign a group to each observation. k is the number of gropus. +1 to include all the observation not included in the exact division
+grid.covariates$split <- dismo::kfold( x = grid.covariates, 
+                                       k = floor(nrow(grid.covariates)/500)+1 )
+
+# Transform into a list of dataframes based on the group assigned in the previous step
+grid.covariates.list <- split(x = grid.covariates, f = grid.covariates$split )
+
+print(paste0("Number of folds = ", length(grid.covariates.list), " (Groups of 500 rows)"))
+length(grid.covariates.list)
+head(grid.covariates.list[[1]])
+```
+
+```{r function to predict}
+my.predict.fun <- function(grid) {
+  #DEFINING THE NEW STUDY DESIGN
+  myNew <- nrow(grid)
+  StudyDesignNew <- matrix(NA, myNew, 1)
+  StudyDesignNew[,1] <- sprintf('new_Sample_%.3d', 1:myNew)
+  StudyDesignNew <- as.data.frame(StudyDesignNew)
+  colnames(StudyDesignNew) = colnames(m$studyDesign)
+  StudyDesignAll <- rbind(m$studyDesign,StudyDesignNew)
+  #DEFINING RANDOM EFFECTS THAT INCLUDE BOTH OLD (USED FOR MODEL FITTING) AND NEW (THE GRID DATA) UNITS
+  rL1 <- m$rL[[1]]
+  xyold <- rL1$s
+  x <- grid$x
+  y <- grid$y
+  xy <- cbind(x, y) 
+  rownames(xy) <- StudyDesignNew[,1]
+  colnames(xy) <- colnames(xyold)
+  xyall <- rbind(xyold,xy)
+  rL1$pi <- StudyDesignAll[,1]
+  rL1$s <- xyall
+  # Predict poisson (integers)
+  predYR <- predict(m, studyDesign=StudyDesignNew, XData=grid, ranLevels=list(site=rL1),
+                   expected = FALSE, predictEtaMean=TRUE)
+  # We use the median instead of the mean to reflect better the results and respect the poisson   distribution in the final results
+  predY <- apply(abind(predYR,along=3),c(1,2), median)
+  return(predY)
+}
+```
+
+
+## Run predictions
+
+Apply the function to all elements in the list, i.e all the subsets with 1000 rows, one after another
+Paste then together in one dataframe and reorder them, so they keep the same order as in the original file from which we extracted the environemntal covariates. Finally, we save the data.
+The first and last line of the code are used to know the total time that R is running the command
+
+### Running without parallelization (going through the list one subset after another) and saving predictions in one chunk
+```{r run predictions}
+res.list <- lapply(grid.covariates.list, my.predict.fun)
+# Paste all results in the same dataframe
+res.df <- do.call("rbind", res.list)
+
+# Reorder back to original order
+my.order <- as.numeric(row.names(res.df))
+res.df <- cbind.data.frame(my.order, res.df)
+res.df <- res.df[order(res.df$my.order),]
+
+## Summary data
+# Abundance per site. We remove the first columns because it indicates the number of the line
+birds.pred.abu <- rowSums(res.df[,-1], na.rm=TRUE)
+# Richness per site. We decide to use an abundance higher than 0.5 as presence
+birds.pred.rich <- rowSums(res.df[,-1] > 0.5, na.rm=TRUE)
+# Add coordinates and put all the data together
+birds.pred <- cbind(x = grid.covariates$x, y = grid.covariates$y, res.df, 
+                      birds.pred.abu = birds.pred.abu, 
+                      birds.pred.rich = birds.pred.rich)
+# Save data
+write.csv(birds.pred , paste0(Model_wd, "/Predict_Berlin_100m_birds_3sites.csv"), 
+          row.names = F)
+```
+
+
+# Plot abundance and richness in Berlin
+
+```{r load gis data}
+berlin <- read_sf(paste0(Gis_wd, "/Berlin_border_3035.gpkg"), crs = 3035)
+berlin <- st_transform(berlin, crs = 25833)
+
+water <- read_sf(paste0(Gis_wd, "/waterbodies_Berlin_25833.gpkg"))
+centroids <- read_sf(paste0(Gis_wd, "/birds_points_25833.gpkg"))
+```
+
+
+## Maps
+
+We need a raster to paste the values, so we can plot them in a full map
+One way of doing it is to load example raster with environmet data to have same extension and resolution
+```{r}
+# load 100m raster as template
+focal.100m <- stack(paste0(Gis_wd, "/FocalMean100m_Stack.tif"))
+names.focal <- read.csv(paste0(Gis_wd, "/names_focal_stack.csv"))
+names(focal.100m) <- names.focal$x
+
+# create empty raster
+raster1 <- raster(focal.100m$distance_water)
+raster1
+# Set to 100m resolution 
+raster.100m <- aggregate(raster1, fact = 5)
+
+## Paste values of abundance and richness
+
+# extract the cell numbers that correspond with the cells with predicitons 
+# based on coordinates
+cells <- cellFromXY(raster.100m, as.matrix(birds.pred[, c("x", "y")]))
+
+raster.abu <- raster.100m
+raster.rich <- raster.100m
+
+# Assign values to raster cells
+raster.abu[cells] <- birds.pred$birds.pred.abu
+plot(raster.abu)
+names(raster.abu) <- "birds.abund"
+
+raster.rich[cells] <- birds.pred$birds.pred.rich
+plot(raster.rich)
+names(raster.rich) <- "birds.richness"
+```
+
+```{r plot abundance map}
+map.abu.berlin <- tm_shape(raster.abu) +
+  tm_raster("birds.abund", title = "Bird index",
+              palette = rev(viridis(10)),
+             # palette = "OrRd",
+             style = "cont",
+            breaks = c(50,100,150,200,250)) +
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_layout(main.title = "Bird abundance \nres = 100m",
+            compass.type = "arrow",
+            legend.title.size = 0.8,
+            legend.text.size = 0.6, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.05,0.05,0.05,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 1.5) +
+  tm_scale_bar(position=c("left", "bottom"), 
+               size = 0.6) 
+
+map.abu.berlin
+# tmap_save(map.abu.berlin, filename = paste0(Plots_wd, "/Map_berlin_birds_abu_100m.png"), 
+#           dpi = 600)
+```
+
+
+```{r, plot richness map}
+map.rich.berlin <- tm_shape(raster.rich) +
+  tm_raster("birds.richness", title = "Species richness",
+             # palette = rev(heat.colors(10)),
+             palette = rev(viridis(10)),
+             style = "cont")+
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_layout(main.title = "Bird species richness \nres = 100m",
+            compass.type = "arrow",
+            legend.title.size = 0.8,
+            legend.text.size = 0.6, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.05,0.05,0.05,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 1.5) +
+  tm_scale_bar(position=c("left", "bottom"), 
+               size = 0.6) 
+
+map.rich.berlin
+# tmap_save(map.rich.berlin, filename = paste0(Plots_wd, "/Map_berlin_birds_richness_100m.png"), 
+#           dpi = 600)
+```
+
+
+## Get the observations in the points to add to maps
+```{r}
+# Load points for bird transects
+sampling.points <- read_sf(paste0(Gis_wd, "/birds_points_25833.gpkg"))
+plot(st_geometry(sampling.points))
+length(sampling.points$routcode_2)
+
+# Get the abundance of each speices in each point
+bird.points <- cbind.data.frame (SITE = sampling.points$routcode_2, st_coordinates(sampling.points))
+bird.points$SITE <- toupper(bird.points$SITE)
+
+birds <- read.csv("./4_Processed_data/NEWBirds_abund_noexo_norare2_noaquatic_bykm.csv")
+head(birds)
+birds$SITE <- toupper(birds$site)
+
+bird.points$SITE
+birds$SITE
+
+bird.points.abund <- merge(bird.points, birds, by = "SITE")
+
+length(bird.points.abund$SITE)
+points.abund <- st_as_sf(bird.points.abund, coords = c("X", "Y"), crs = 25833)
+
+# Get the presence of each species in each point
+bird.points.presence <- bird.points.abund
+bird.points.presence[,4:69][bird.points.presence[,4:69]>0] <- 1
+points.presence <- st_as_sf(bird.points.presence, coords = c("X", "Y"), crs = 25833)
+```
+
+## Plot the map for Great tit
+```{r, echo=FALSE}
+# extract the cell numbers that correspond with the cells with predicitons 
+# based on coordinates
+cells <- cellFromXY(raster.100m, as.matrix(birds.pred[, c("x", "y")]))
+
+raster.Pm <- raster.100m
+
+# Assign values to raster cells
+raster.Pm[cells] <- birds.pred$Parus_major
+plot(raster.Pm)
+raster.Pm <- mask(raster.Pm, berlin)
+
+
+map.parus.major <- tm_shape(raster.Pm) +
+  tm_raster(title = "Abundance index",
+             # palette = rev(heat.colors(10)),
+             palette = rev(viridis(10)),
+             style = "cont")+
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_shape(points.abund) +
+  tm_symbols("Parus_major",
+             shape=21,
+          size=0.2,
+          border.lwd = 1,
+          border.col = "black",
+          palette = rev(viridis(10)),
+          style = "cont",
+          # breaks = c(0,20),
+          title.col = "Observed abundance", 
+          legend.col.show = FALSE)+
+tm_layout(main.title = "Abundance of Great tit (Parus major)\nres = 100m",
+            compass.type = "arrow",
+            legend.title.size = 0.8,
+            legend.text.size = 0.6, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.05,0.05,0.05,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 1.5) +
+  tm_scale_bar(position=c("left", "bottom"), 
+               size = 0.6) 
+
+map.parus.major
+# tmap_save(map.parus.major, filename = paste0(Plots_wd, "/Map_berlin_Pmajor_100m.png"), 
+#           dpi = 600)
+```
+
+
+## Plot the map for Crows
+```{r, echo=FALSE}
+cells <- cellFromXY(raster.100m, as.matrix(birds.pred[, c("x", "y")]))
+
+raster.Cc <- raster.100m
+
+# Assign values to raster cells
+raster.Cc[cells] <- birds.pred$Corvus_corone
+plot(raster.Cc)
+
+raster.Cc <- mask(raster.Cc, berlin)
+
+map.corvus.corone <- tm_shape(raster.Cc) +
+    tm_raster(title = "Abundance index",
+             # palette = rev(heat.colors(10)),
+             palette = rev(viridis(10)),
+             style = "cont", 
+             breaks = c(1,2,3,4,5))+
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_shape(points.abund) +
+  tm_symbols("Corvus_corone",
+             shape=21,
+          size=0.2,
+          border.lwd = 1,
+          border.col = "black",
+          palette = rev(viridis(10)),
+          style = "cont",
+          # breaks = c(0,20),
+          title.col = "Observed abundance", 
+          legend.col.show = FALSE)+
+tm_layout(main.title = "Abundance of Carrion crow (Corvus corone)\nres = 100m",
+            compass.type = "arrow",
+            legend.title.size = 0.8,
+            legend.text.size = 0.6, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.05,0.05,0.05,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 1.5) +
+  tm_scale_bar(position=c("left", "bottom"), 
+               size = 0.6) 
+map.corvus.corone
+# tmap_save(map.corvus.corone, filename = paste0(Plots_wd, "/Map_berlin_Ccorone_100m.png"), 
+#           dpi = 600)
+```
+
+
+## Plot the map for Sky lark
+```{r, echo=FALSE}
+# extract the cell numbers that correspond with the cells with predicitons 
+# based on coordinates
+cells <- cellFromXY(raster.100m, as.matrix(birds.pred[, c("x", "y")]))
+
+raster.Aa <- raster.100m
+
+# Assign values to raster cells
+raster.Aa[cells] <- birds.pred$Alauda_arvensis
+plot(raster.Aa)
+
+raster.Aa <- mask(raster.Aa, berlin)
+
+
+map.alauda.arvensis <- tm_shape(raster.Aa) +
+    tm_raster(title = "Abundance index",
+             # palette = rev(heat.colors(10)),
+             palette = rev(viridis(10)),
+             style = "cont", 
+             breaks = c(1,2,3,4,5))+
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_shape(points.abund) +
+  tm_symbols("Alauda_arvensis",
+             shape=21,
+          size=0.2,
+          border.lwd = 1,
+          border.col = "black",
+          palette = rev(viridis(10)),
+          style = "cont",
+          # breaks = c(0,20),
+          title.col = "Observed abundance", 
+          legend.col.show = FALSE)+
+tm_layout(main.title = "Abundance of Sky lark (Alauda arvensis)\nres = 100m",
+            compass.type = "arrow",
+            legend.title.size = 0.8,
+            legend.text.size = 0.6, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.05,0.05,0.05,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 1.5) +
+  tm_scale_bar(position=c("left", "bottom"), 
+               size = 0.6) 
+
+map.alauda.arvensis 
+# tmap_save(map.alauda.arvensis, filename = paste0(Plots_wd, "/Map_berlin_Aarvensis_100m.png"), 
+#           dpi = 600)
+```
+
+

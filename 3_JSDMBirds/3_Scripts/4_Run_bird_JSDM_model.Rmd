@@ -1,0 +1,938 @@
+---
+title: "Run_bird_JSDM"
+author: "Aimara Planillo"
+date: "12/10/2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Hierarchical Species Community Models for Bird abundance 
+
+This scripts includes a bird data exploration and the code for running the 
+bird abundance HSCM 
+
+
+### Packages
+```{r}
+library(dplyr)
+library(stringr)
+library(Hmsc)
+library(coda)
+library(corrplot)
+library(MCMCvis)
+library(reshape2)
+library(abind)
+library(ggplot2)
+library(sf)
+library(tmap)
+```
+
+### Workspace
+```{r}
+WorkDir <- getwd()
+output_wd <- paste0(WorkDir, "/5_Results/Bird_model/")
+```
+
+
+# Run Model Bird abundance
+
+The main characteristics of the data used for the model are:
+- 66 bird species
+- 29 transects (mean values of the transect)
+- 10 Covariates: 
+    (noise.100m + pop.100m + tree.100m + open.green100m): *environmental covariates* 
+    * prey.abu: *prey abundance*
+- 7 Traits: body size (*log-transformed*) + diet (*4 categories*) + migrant (*3 categories*)
+- Random: location of the transects
+
+```{r prepare data for model}
+# load bird data
+birds_km <- read.csv("./4_processed_data/NEWBirds_abund_noexo_norare2_noaquatic_bykm.csv") # matrix with sites in rows and bird abund in columns
+birds_km$site <- tolower(birds_km$site)
+
+bird_data <- birds_km %>%
+  select(-site)  # remove site
+nrow(bird_data) # [1] 29 sites
+ncol(bird_data) #[1] 66 species
+
+# response matrix
+Y.birds <- as.matrix(bird_data)
+
+# Environmental data
+env100m.tmp <- read.csv("./2_Raw_data/transects_allenvir_100m.csv")
+
+# renaming covariates for the analysis
+abiotic.covariates <- cbind.data.frame(site = env100m.tmp$routecode_2, 
+                                       tree.100m = env100m.tmp$tree_cover,
+                                       open.green100m = env100m.tmp$open_green,
+                                       noise.100m = env100m.tmp$noise,
+                                       pop.100m = env100m.tmp$pop_100m)
+head(abiotic.covariates)
+summary(abiotic.covariates)
+
+# Prey data
+carabids <- read.csv("./2_Raw_data/carabids_summary_pois_predictions.csv")
+grasshoppers <- read.csv("./2_Raw_data/grasshoppers_summary_pois_predictions.csv")
+spiders <- read.csv("./2_Raw_data/spiders_summary_pois_predictions.csv")
+
+preys <- cbind.data.frame(site.preys = carabids$site,
+                          carabids.abu = carabids$Abu,
+                          grasshop.abu = grasshoppers$Abu,
+                          spiders.abu = spiders$Abu,
+                          carabids.rich = carabids$S,
+                          grasshop.rich = grasshoppers$S,
+                          spiders.rich = spiders$S)
+preys
+
+## Check correlations in predictors
+# Correlations in Xdata
+all.cov <- cbind.data.frame(abiotic.covariates, preys[,-1])
+cor(all.cov[,2:ncol(all.cov)])
+
+# All the abundances of prey are correlated, thus we use a summary of them 
+all.cov$prey.abu <- all.cov$carabids.abu + all.cov$grasshop.abu + all.cov$spiders.abu
+
+## Spatial coordinates
+xyData.tmp <- read.csv('./2_Raw_data/transects_coordinates_25833.csv')
+head(xyData.tmp)
+
+xyData <- cbind(x = xyData.tmp$X, y = xyData.tmp$Y)
+
+## Traits
+# Load traits
+Trdata.tmp <- read.csv("./4_Processed_data/NEWBirds_traits_noexo_norare2_noaquatic.csv") # matrix with species in rows and traits in columns
+Trdata.tmp
+nrow(Trdata.tmp) #[1] 66 species
+head(Trdata.tmp)
+
+# select only hte traits we are going to use and species names
+Trdata <- Trdata.tmp %>% 
+  select(scientific2, diet.5cat, migrant, bodymass.value)
+
+# correct format of variables
+Trdata$diet.5cat <- factor(Trdata$diet.5cat, 
+                           levels = c("PlantSeed", "Invertebrate", "Omnivore", "VertFishScav"))
+
+Trdata$migrant <- factor(Trdata$migrant, 
+                           levels = c("Resident", "Semi", "Migrant" ))
+
+Trdata$log10.bodymass <- log(Trdata$bodymass.value)
+
+
+Trdata 
+```
+
+
+## Set up and Run the model
+
+
+```{r}
+### Study design
+studyDesign <- data.frame(site = birds_km$site)
+sRL <- xyData
+rownames(sRL) <- birds_km$site
+rL <- HmscRandomLevel(sData = sRL)
+rL$s
+
+### Define MCMC parameters
+thin <- 50
+samples <- 15000
+transient <- 30000
+nChains <- 3
+verbose <- 10000
+
+# Regression formula for environmental covariates
+XFormula.mbirds = ~ (tree.100m + open.green100m + noise.100m + pop.100m) * prey.abu
+
+# Regression formula for traits
+TrFormula.mbirds = ~ migrant + diet.5cat + log10.bodymass
+
+
+# set the model
+## GAUSSIAN DISTRIBUTION: relative abundance data 
+m <- Hmsc(Y = Y.birds, XData = all.cov, XFormula = XFormula.mbirds,
+           studyDesign=studyDesign, ranLevels=list(site=rL),
+          TrFormula = TrFormula.mbirds, TrData = Trdata,
+          distr = "normal")
+
+# run Markov Chains
+m <- sampleMcmc(m, thin = thin, samples = samples, transient = transient,
+                nChains = nChains, verbose = verbose)
+#Save de model
+# filename <- "model_birds_3sites_perkm.rds"
+# saveRDS(m, file = paste0(output_wd, filename))
+```
+
+
+# Check Bird model
+
+```{r model convergence}
+# Evaluate convergence: Effective sample size and gelman-rubin diagnostic (potencial reduction factor)
+mpost <- convertToCodaObject(m)
+# Numerical output
+ess.beta <- effectiveSize(mpost$Beta)
+gd.beta <- gelman.diag(mpost$Beta, multivariate = FALSE)$psrf
+ess.gamma <- effectiveSize(mpost$Gamma)
+gd.gamma <- gelman.diag(mpost$Gamma, multivariate = FALSE)$psrf 
+ess.omega <- effectiveSize(mpost$Omega[[1]])
+gd.omega <- gelman.diag(mpost$Omega[[1]], multivariate = FALSE)$psrf
+convergence.names <- c("ess.beta", "ess.gamma", "ess.omega",
+               "gd.beta", "gd.gamma", "gd.omega")
+convergence.list <- list(ess.beta, ess.gamma, ess.omega,
+                 gd.beta, gd.gamma, gd.omega)
+# save output
+for (i in 1:length(convergence.names)){
+  write.csv(convergence.list[[i]], paste0(output_wd, convergence.names[i], ".csv"))
+}
+
+# Graphical output
+png("birds_model_convergence_hist.png", width = 800, height = 1000,
+    pointsize = 20)
+par(mfrow=c(3,2))
+hist(ess.beta, main = "ess(beta)_birds")
+hist(ess.gamma, main = "ess(gamma)_birds")
+hist(ess.omega, main = "ess(omega)_birds")
+hist(gd.beta, main = "psrf(beta)_birds")
+hist(gd.gamma, main = "psrf(gamma)_birds")
+hist(gd.omega, main = "psrf(omega)_birds")
+dev.off()
+
+# Save plots of the chains
+MCMCtrace(mpost$Beta, 
+          pdf = TRUE, 
+          open_pdf = FALSE,
+          filename = "birds_MCMCtrace_beta",
+          wd = getwd())
+MCMCtrace(mpost$Gamma, 
+          pdf = TRUE, 
+          open_pdf = FALSE,
+          filename = "birds_MCMCtrace_gamma",
+          wd = getwd())
+MCMCtrace(mpost$Omega[[1]], 
+          pdf = TRUE, 
+          open_pdf = FALSE,
+          filename = "birds_MCMCtrace_omega",
+          wd = getwd())
+
+par(mfrow=c(1,1))
+```
+
+```{r Model Fit R2}
+# Explanatory R2. Get predictions for the observed values 
+preds <- computePredictedValues(m, expected = TRUE)
+preds.values <- apply(abind(preds,along=3),c(1,2), mean) # We use the mean because it was a normal model
+
+# R2 with the built in function
+modelr2.explanatory <- evaluateModelFit(hM = m, predY = preds)
+
+# R2 of the model
+mean(modelr2.explanatory$R2, na.rm = TRUE)
+
+temp.r2 <- cbind.data.frame(r2 = as.numeric(modelr2.explanatory$R2), 
+                            species = as.character(m$spNames))
+plot(temp.r2$r2~temp.r2$species)
+
+# R2 for species, Manually comparing observed vs predicted
+R2.sp <- matrix(NA, m$ns, 1)
+for (i in 1:m$ns) {
+  R2.sp[i, ] <- cor(preds.values[, i],m$Y[, i])^2
+}
+
+mean(R2.sp, na.rm=TRUE)
+
+
+# R2 for sites, Manually comparing observed vs predicted
+R2.site <- matrix(NA, m$ny, 1)
+for (i in 1:m$ny) {
+  R2.site[i, ] <- cor(preds.values[i, ], m$Y[i, ])^2
+}
+mean(R2.site)
+```
+
+
+```{r estimates beta and gamma parameters}
+# load premade function for plotting
+source(paste0(WorkDir, "/3_Scripts/Function_PlotBetas.R"))
+
+## Beta values
+Beta.results <- as.data.frame(MCMCsummary(mpost$Beta))
+postBeta <- getPostEstimate(m, parName = "Beta")
+
+# default plots
+plotBeta(m, post = postBeta, param = "Support", supportLevel = 0.95)
+plotBeta(m, post = postBeta, param = "Support", supportLevel = 0.75)
+
+# customized plots
+# Print a plot for each predictor
+plot.cov.betas(m, modelType = "birds") 
+
+
+# plots of coefficients
+C4 <- mpost$Beta[, grep("C4",colnames(mpost$Beta[[1]]))]
+MCMCplot(C4, 
+           ref_ovl = TRUE,
+           rank = FALSE,
+           xlab = 'noise',
+           labels_sz = 0.3,
+           med_sz = 1,
+           thick_sz = 1,
+           thin_sz = 1,
+           ax_sz = 1,
+           main_text_sz = 1)
+
+## Plots of Coefficients of the Interactions
+# extract the posteriors for the interactions
+C7 <- mpost$Beta[, grep("C7",colnames(mpost$Beta[[1]]))]
+colnames(C7[[1]])
+head(C7)
+C8 <- mpost$Beta[, grep("C8",colnames(mpost$Beta[[1]]))]
+C9 <- mpost$Beta[, grep("C9",colnames(mpost$Beta[[1]]))]
+C10 <- mpost$Beta[, grep("C10",colnames(mpost$Beta[[1]]))]
+
+interactions <- list(C7, C8, C9, C10)
+inter.names <- c("tree x prey", 
+                 "open.green x prey",
+                 "noise X prey",
+                 "pop X prey")
+
+# save the plots in a loop
+for (i in 1:length(interactions)){
+png(paste0("Betas_coef_plot_C", i+6, "_", inter.names[i], ".png"),
+   width = 4000, height = 2500)
+ MCMCplot(interactions[[i]], 
+          ISB = FALSE,
+          ref_ovl = TRUE,
+          rank = FALSE,
+          xlab = 'ESTIMATE',
+          main = m$covNames[i+6],
+          labels_sz = 2.5,
+          med_sz = 4,
+          thick_sz = 5,
+          thin_sz = 3,
+          ax_sz = 5,
+          axis_text_sz = 3,
+          tick_text_sz = 2, 
+          main_text_sz = 4,
+          mar = c(7, 4.1, 4.1, 2.1))
+  dev.off()
+}
+
+
+## Gamma values
+Gamma.results <- as.data.frame(MCMCsummary(mpost$Gamma))
+# Default gamma plot in Hmsc package
+postGamma <- getPostEstimate(m, parName = "Gamma")
+plotGamma(hM = m, post = postGamma, param = "Support", supportLevel = 0.75)
+
+# Coef. gammma
+MCMCplot(mpost$Gamma, ref_ovl = TRUE)
+```
+
+
+```{r species co-occurrence}
+# species associations in residual variance
+OmegaCor <- computeAssociations(m)
+OmegaCor[[1]]$mean
+OmegaCor[[1]]$support
+
+supportLevel <- 0.75
+
+# Default plot in Hmsc package
+toPlot <- ((OmegaCor[[1]]$support > supportLevel)
+           + (OmegaCor[[1]]$support < (1 - supportLevel)) > 0) * OmegaCor[[1]]$mean
+corrplot(toPlot, method = "color", 
+         col = colorRampPalette(c("blue", "white", "red"))(200),
+         title = paste0("random effect level: ", m$rLNames[1]), 
+         mar = c(0,0,1,0))
+
+par(mar = c (5,5,4,5))
+
+# create data frame for customized plot
+assoc.mean <- melt(OmegaCor[[1]]$mean)
+assoc.support <- melt(OmegaCor[[1]]$support)
+
+nrow(assoc.mean); nrow(assoc.support)
+cbind.data.frame(assoc.mean$X1[c(1:50, 4150:4200)], assoc.support$X1[c(1:50, 4150:4200)])
+
+associations <- cbind.data.frame(assoc.mean, assoc.support$value)
+colnames(associations) <- c("species1", "species2", "mean", "support")
+
+head(associations, 20)
+
+write.csv(associations, paste0(output_wd, "Birds_associations.csv")
+          , row.names = FALSE)
+```
+
+
+### Variance partitioning
+
+The order of the variables, if they are continuous, is 
+1. intercept(this can be in any group)
+2. first variable
+3. second variable
+ETC.
+
+The formulas we used for running the models area: 
+XFormula.grasshop = ~ (tree.100m + open.green100m + noise.100m + pop.100m) * prey.abu
+
+```{r variance partitioning}
+# design matrix
+head(m$X)
+
+# Total variance explained by hte model can be partition into the contributions
+# of each fixed effect (or group) and random effect
+VP <- computeVariancePartitioning(m, group = c(1,1,1,2,2,3,4,4,4,4), groupnames = c("nature", "urban", "prey", "interactions"))
+
+# Save the Variance partitioning info
+VP$vals
+VP$R2T
+
+VP.table <- as.data.frame(VP$vals) 
+VP.table
+write.csv(VP.table, paste0(output_wd, "Varpart_values.csv"))
+
+# plot var part. default plot
+plotVariancePartitioning(m, VP = VP, las = 2, cex.names = 0.4)
+title(main = "\n \nBirds")
+```
+
+
+# Bird model: Predict responses to environmental gradients
+
+We are going to use 95CI
+```{r working folder}
+Gradients_wd <- paste0(WorkDir, "5_Results/Bird_EnvGradients/")
+```
+
+
+```{r create response gradients for species abundance}
+# create a gradient of prey abundance
+Gradient.prey <- constructGradient(m, focalVariable = "prey.abu")
+predY.prey <- predict(m, XData = Gradient.prey$XDataNew, studyDesign = Gradient.prey$studyDesignNew, 
+                 ranLevels = Gradient.prey$rLNew, expected = FALSE)
+# saveRDS(predY.prey, paste0(Gradients_wd, "pred_response_prey.rds"))
+
+# Summed response to prey.abu
+plotGradient(m, Gradient.prey, pred=predY, measure="S", las=1,
+             showData = TRUE, main='Species richness (measure="S")')
+# Example one species: species 10
+plotGradient(m, Gradient, pred=predY, measure="Y", index=10, las=1,
+             showData = TRUE, main='Focal species occurrence (measure="Y")')
+
+# Community-weighted mean values of traits
+plotGradient(m, Gradient, pred=predY, measure="T", index=2, las=1,
+             showData = TRUE, main='Mean trait value (measure="T")')
+# save the plot
+png(paste0(Gradients_wd, "/birds_totalabund_prey.png"))
+plotGradient(m, Gradient.prey, pred=predY.prey, measure="S", las=1,
+             showData = TRUE, main='Total abundance')
+dev.off()
+
+## we predict for all our variables
+# Summed response to tree
+Gradient.tree <- constructGradient(m, focalVariable = "tree.100m")
+predY.tree <- predict(m, XData = Gradient.tree$XDataNew, 
+                 studyDesign = Gradient.tree$studyDesignNew, 
+                 ranLevels = Gradient.tree$rLNew, expected = FALSE)
+# saveRDS(predY.tree, paste0(Gradients_wd, "pred_response_tree.rds"))
+png(paste0(Gradients_wd, "/birds_totalabund_tree.png"))
+plotGradient(m, Gradient.tree, pred=predY.tree, measure="S", las=1,
+             showData = TRUE, main='Total abundance')
+dev.off()
+
+# Summed response to open.green
+Gradient.og <- constructGradient(m, focalVariable = "open.green100m")
+predY.og <- predict(m, XData = Gradient.og$XDataNew, 
+                 studyDesign = Gradient.og$studyDesignNew, 
+                 ranLevels = Gradient.og$rLNew, expected = FALSE)
+# saveRDS(predY.og, paste0(Gradients_wd, "pred_response_ogreen.rds"))
+png(paste0(Gradients_wd, "/birds_totalabund_ogreen.png"))
+plotGradient(m, Gradient.og, pred=predY.og, measure="S", las=1,
+             showData = TRUE, main='Total abundance')
+dev.off()
+
+# Summed response to noise
+Gradient.noise <- constructGradient(m, focalVariable = "noise.100m")
+predY.noise <- predict(m, XData = Gradient.noise$XDataNew, 
+                 studyDesign = Gradient.noise$studyDesignNew, 
+                 ranLevels = Gradient.noise$rLNew, expected = FALSE)
+# saveRDS(predY.noise, paste0(Gradients_wd, "pred_response_noise.rds"))
+png(paste0(Gradients_wd, "/birds_totalabund_noise.png"))
+plotGradient(m, Gradient.noise, pred=predY.noise, measure="S", las=1,
+             showData = TRUE, main='Total abundance')
+dev.off()
+
+# Summed response to human population density
+Gradient.pop <- constructGradient(m, focalVariable = "pop.100m")
+predY.pop <- predict(m, XData = Gradient.pop$XDataNew, 
+                 studyDesign = Gradient.pop$studyDesignNew, 
+                 ranLevels = Gradient.pop$rLNew, expected = FALSE)
+# saveRDS(predY.pop, paste0(Gradients_wd, "pred_response_pop.rds"))
+png(paste0(Gradients_wd, "/birds_totalabund_pop.png"))
+plotGradient(m, Gradient.pop, pred=predY.pop, measure="S", las=1,
+             showData = TRUE, main='Total abundance')
+dev.off()
+```
+
+
+```{r plot response gradients for traits}
+# save plots in a loop 
+
+# Community-weigthed trait values responses to tree
+for (i in 1:length(m$trNames)){
+  png(paste0(Gradients_wd, "birds_trait_", m$trNames[i], "_tree.png"))
+  plotGradient(m, Gradient.tree, pred=predY.tree, 
+               measure="T", index = i, las=1,
+               showData = TRUE, main=paste0('Trait response: ', m$trNames[i]))
+  dev.off()
+}
+
+# Community-weigthed trait values response to open.green
+for (i in 1:length(m$trNames)){
+  png(paste0(Gradients_wd, "/birds_trait_", m$trNames[i], "_og.png"))
+  plotGradient(m, Gradient.og, pred=predY.og, 
+               measure="T", index = i, las=1,
+               showData = TRUE, main=paste0('Trait response: ', m$trNames[i]))
+  dev.off()
+}
+
+# Community-weigthed trait values response to noise
+for (i in 1:length(m$trNames)){
+  png(paste0(Gradients_wd, "/birds_trait_", m$trNames[i], "_noise.png"))
+  plotGradient(m, Gradient.noise, pred=predY.noise, 
+               measure="T", index = i, las=1,
+               showData = TRUE, main=paste0('Trait response: ', m$trNames[i]))
+  dev.off()
+}
+
+# Community-weigthed trait values response to human population density
+for (i in 1:length(m$trNames)){
+  png(paste0(Gradients_wd, "/birds_trait_", m$trNames[i], "_pop.png"))
+  plotGradient(m, Gradient.pop, pred=predY.pop, 
+               measure="T", index = i, las=1,
+               showData = TRUE, main=paste0('Trait response: ', m$trNames[i]))
+  dev.off()
+}
+
+# Community-weigthed trait values response to prey abundance
+for (i in 1:length(m$trNames)){
+  png(paste0(Gradients_wd, "/birds_trait_", m$trNames[i], "_prey.png"))
+  plotGradient(m, Gradient.prey, pred=predY.prey, 
+               measure="T", index = i, las=1,
+               showData = TRUE, main=paste0('Trait response: ', m$trNames[i]))
+  dev.off()
+}
+```
+
+
+```{r response of species richness to environmental gradients}
+
+## species richness response to tree cover
+predY.treesp <- list()
+for (i in 1:length(predY.tree)){
+  predY.treesp[[i]] <- predY.tree[[i]]
+  predY.treesp[[i]][predY.treesp[[i]] >0] <- 1
+  predY.treesp[[i]][predY.treesp[[i]] <0] <- 0
+}
+
+png(paste0(Gradients_wd, "/birds_sprichness_tree.png"))
+plotGradient(m, Gradient.tree, pred=predY.treesp, measure="S", las=1,
+             showData = FALSE, main='Species richness')
+dev.off()
+
+# Sp richness response to open.green
+predY.ogsp <- list()
+for (i in 1:length(predY.og)){
+  predY.ogsp[[i]] <- predY.og[[i]]
+  predY.ogsp[[i]][predY.treesp[[i]] >0] <- 1
+  predY.ogsp[[i]][predY.ogsp[[i]] <0] <- 0
+}
+png(paste0(Gradients_wd, "/birds_sprichness_ogreen.png"))
+plotGradient(m, Gradient.og, pred=predY.ogsp, measure="S", las=1,
+             showData = FALSE, main='Species richness')
+dev.off()
+
+# Sp richness response to noise
+# predY.noise 
+predY.noisesp <- list()
+for (i in 1:length(predY.noise)){
+  predY.noisesp[[i]] <- predY.noise[[i]]
+  predY.noisesp[[i]][predY.noisesp[[i]] >0] <- 1
+  predY.noisesp[[i]][predY.noisesp[[i]] <0] <- 0
+}
+
+png(paste0(Gradients_wd, "/birds_sprichness_noise.png"))
+plotGradient(m, Gradient.noise, pred=predY.noisesp, measure="S", las=1,
+             showData = FALSE, main='Species richness')
+dev.off()
+
+# Summed response to human population density
+# predY.pop
+predY.popsp <- list()
+for (i in 1:length(predY.pop)){
+  predY.popsp[[i]] <- predY.pop[[i]]
+  predY.popsp[[i]][predY.popsp[[i]] >0] <- 1
+  predY.popsp[[i]][predY.popsp[[i]] <0] <- 0
+}
+png(paste0(Gradients_wd, "/birds_sprichness_pop.png"))
+plotGradient(m, Gradient.pop, pred=predY.popsp, measure="S", las=1,
+             showData = FALSE, main='Species richness')
+dev.off()
+
+# Summed response to prey abundance
+# predY.prey 
+predY.preysp <- list()
+for (i in 1:length(predY.prey)){
+  predY.preysp[[i]] <- predY.prey[[i]]
+  predY.preysp[[i]][predY.preysp[[i]] >0] <- 1
+  predY.preysp[[i]][predY.preysp[[i]] <0] <- 0
+}
+png(paste0(Gradients_wd, "/birds_sprichness_prey.png"))
+plotGradient(m, Gradient.prey, pred=predY.preysp, measure="S", las=1,
+             showData = FALSE, main='Species richness')
+dev.off()
+```
+
+
+## Responses to environmental variables at different values of prey abundance 
+
+We are going to use three levels: 
+low = 135 (minimun value of the index), 
+mean = 200 (mean), 
+high = 365 (maximum value of the index)
+
+```{r select prey values}
+lowprey <- min(m$XData$prey.abu)
+meanprey <- mean(m$XData$prey.abu)
+highprey <- max(m$XData$prey.abu)
+prey.gradient <- cbind(lowprey, meanprey, highprey)
+colnames(prey.gradient)
+```
+
+
+```{r response to noise and prey gradient}
+for (i in 1:ncol(prey.gradient)){
+  #construct the gradient for the predictions
+  gradient <- constructGradient(m, focalVariable = "noise.100m",
+                                        non.focalVariables = list(prey.abu=list(3,prey.gradient[,i])),
+                                        ngrid = nrow(m$Y))
+  gradname <- paste0("gradient.noise.", colnames(prey.gradient)[i])
+  assign(gradname, gradient)
+  # predict with the iterations
+  predictions <- predict(m, XData = gradient$XDataNew, 
+                           studyDesign = gradient$studyDesignNew,
+                           ranLevels = gradient$rLNew, 
+                           expected = FALSE)
+  predname <- paste0("predY.noise.", colnames(prey.gradient)[i])
+  assign(predname, predictions)
+  # Get the final averaged predictions
+  predS <- abind(lapply(predictions, rowSums), along = 2)
+  predSname <- paste0("predS.noise.", colnames(prey.gradient)[i])
+  assign(predSname, predS)
+}
+
+noise.gradient.list <- list(gradient.noise.lowprey, gradient.noise.meanprey, gradient.noise.highprey)
+predY.noise.list <- list(predY.noise.lowprey, predY.noise.meanprey, predY.noise.highprey)
+predS.noise.list <- list(predS.noise.lowprey, predS.noise.meanprey, predS.noise.highprey)
+
+
+# saveRDS(noise.gradient.list, paste0(Gradients_wd, "/noise_gradient_list.rds"))
+# saveRDS(predY.noise.list, paste0(Gradients_wd, "/noise_predY_gradient_list.rds"))
+# saveRDS(predS.noise.list, paste0(Gradients_wd, "/noise_predCommunity_gradient_list.rds"))
+```
+
+```{r response to human population and prey gradient}
+for (i in 1:ncol(prey.gradient)){
+  gradient <- constructGradient(m, focalVariable = "pop.100m",
+                                        non.focalVariables = list(prey.abu=list(3,prey.gradient[,i])),
+                                        ngrid = nrow(m$Y))
+  gradname <- paste0("gradient.pop.", colnames(prey.gradient)[i])
+  assign(gradname, gradient)
+  predictions <- predict(m, XData = gradient$XDataNew, 
+                           studyDesign = gradient$studyDesignNew,
+                           ranLevels = gradient$rLNew, 
+                           expected = FALSE)
+  predname <- paste0("predY.pop.", colnames(prey.gradient)[i])
+  assign(predname, predictions)
+  predS <- abind(lapply(predictions, rowSums), along = 2)
+  predSname <- paste0("predS.pop.", colnames(prey.gradient)[i])
+  assign(predSname, predS)
+}
+
+pop.gradient.list <- list(gradient.pop.lowprey, gradient.pop.meanprey, gradient.pop.highprey)
+predY.pop.list <- list(predY.pop.lowprey, predY.pop.meanprey, predY.pop.highprey)
+predS.pop.list <- list(predS.pop.lowprey, predS.pop.meanprey, predS.pop.highprey)
+```
+
+```{r response to tree cover and prey gradient}
+for (i in 1:ncol(prey.gradient)){
+  gradient <- constructGradient(m, focalVariable = "tree.100m",
+                                        non.focalVariables = list(prey.abu=list(3,prey.gradient[,i])),
+                                        ngrid = nrow(m$Y))
+  gradname <- paste0("gradient.tree.", colnames(prey.gradient)[i])
+  assign(gradname, gradient)
+  predictions <- predict(m, XData = gradient$XDataNew, 
+                           studyDesign = gradient$studyDesignNew,
+                           ranLevels = gradient$rLNew, 
+                           expected = FALSE)
+  predname <- paste0("predY.tree.", colnames(prey.gradient)[i])
+  assign(predname, predictions)
+  predS <- abind(lapply(predictions, rowSums), along = 2)
+  predSname <- paste0("predS.tree.", colnames(prey.gradient)[i])
+  assign(predSname, predS)
+}
+
+tree.gradient.list <- list(gradient.tree.lowprey, gradient.tree.meanprey, gradient.tree.highprey)
+predY.tree.list <- list(predY.tree.lowprey, predY.tree.meanprey, predY.tree.highprey)
+predS.tree.list <- list(predS.tree.lowprey, predS.tree.meanprey, predS.tree.highprey)
+```
+
+```{r response to open green and prey gradient}
+# Make the predictions for the three levels of prey abund
+for (i in 1:ncol(prey.gradient)){
+    #construct the gradient for the predictions
+  gradient <- constructGradient(m, focalVariable = "open.green100m",
+                                        non.focalVariables = list(prey.abu=list(3,prey.gradient[,i])),
+                                        ngrid = nrow(m$Y))
+  gradname <- paste0("gradient.open.green.", colnames(prey.gradient)[i])
+  assign(gradname, gradient)
+  # predict with the iterations
+  predictions <- predict(m, XData = gradient$XDataNew, 
+                           studyDesign = gradient$studyDesignNew,
+                           ranLevels = gradient$rLNew, 
+                           expected = FALSE)
+  predname <- paste0("predY.open.green.", colnames(prey.gradient)[i])
+  assign(predname, predictions)
+  # Get the final averaged predictions
+  predS <- abind(lapply(predictions, rowSums), along = 2)
+  predSname <- paste0("predS.open.green.", colnames(prey.gradient)[i])
+  assign(predSname, predS)
+}
+
+ogreen.gradient.list <- list(gradient.open.green.lowprey, gradient.open.green.meanprey, gradient.open.green.highprey)
+predY.ogreen.list <- list(predY.open.green.lowprey, predY.open.green.meanprey, predY.open.green.highprey)
+predS.ogreen.list <- list(predS.open.green.lowprey, predS.open.green.meanprey, predS.open.green.highprey)
+```
+
+
+## Create hte data frames for plotting
+
+
+```{r extract values for plotting noise and prey}
+prey.gradient.names <- c("lowprey", "meanprey", "highprey")
+
+# extract env gradient
+noise.gradient <- gradient.noisexprey[[1]]$XDataNew$noise.100m
+
+# Get Credible intervals for the three community predicitons
+for (i in 1:length(predS.noisexprey)){
+    qpred =  apply(predS.noisexprey[[i]], c(1), quantile, prob = c(0.025, 0.125, 0.5, 0.875, 0.975), na.rm = TRUE)
+    assign(paste0("qpred.noise.", prey.gradient.names[i]), qpred)
+      }
+
+# Get Y X values from the model, to plot the points
+pY = rowSums(m$Y)
+pX = m$XData[, "noise.100m"]
+
+# Build dataframes with all the data
+toplot.noise.lowprey <- cbind.data.frame(prey = gradient.noisexprey[[1]]$XDataNew$prey.abu,
+                                         noise = noise.gradient,
+                                         noise.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.noise.lowprey[3,],
+                                         low95 = qpred.noise.lowprey[1,], 
+                                         low75 = qpred.noise.lowprey[2,], 
+                                         high75 = qpred.noise.lowprey[4,], 
+                                         high95 = qpred.noise.lowprey[5,])
+
+toplot.noise.meanprey <- cbind.data.frame(prey = gradient.noisexprey[[2]]$XDataNew$prey.abu,
+                                         noise = noise.gradient,
+                                         noise.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.noise.meanprey[3,],
+                                         low95 = qpred.noise.meanprey[1,], 
+                                         low75 = qpred.noise.meanprey[2,], 
+                                         high75 = qpred.noise.meanprey[4,], 
+                                         high95 = qpred.noise.meanprey[5,])
+
+toplot.noise.highprey <- cbind.data.frame(prey = gradient.noisexprey[[3]]$XDataNew$prey.abu,
+                                         noise = noise.gradient,
+                                         noise.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.noise.highprey[3,],
+                                         low95 = qpred.noise.highprey[1,], 
+                                         low75 = qpred.noise.highprey[2,], 
+                                         high75 = qpred.noise.highprey[4,], 
+                                         high95 = qpred.noise.highprey[5,])
+
+toplot.noise.all <- rbind(toplot.noise.lowprey, toplot.noise.meanprey, toplot.noise.highprey)
+toplot.noise.all$site <- rownames(toplot.noise.all)
+
+write.csv(toplot.noise.all, paste0(Gradients_wd, "/Toplot_noisexprey_sites.csv"), row.names = FALSE)
+```
+
+```{r extract values for plotting human population and prey}
+# extract env gradient
+pop.gradient <- gradient.popxprey[[1]]$XDataNew$pop.100m
+
+# Get Credible intervals for the three community predicitons
+for (i in 1:length(predS.popxprey)){
+    qpred =  apply(predS.popxprey[[i]], c(1), quantile, prob = c(0.025, 0.125, 0.5, 0.875, 0.975), na.rm = TRUE)
+    assign(paste0("qpred.pop.", prey.gradient.names[i]), qpred)
+      }
+  
+qpred.pop.lowprey  
+
+# Get Y X values from the model, to plot the points
+pY = rowSums(m$Y)
+pX = m$XData[, "pop.100m"]
+
+# Build dataframes with all the data
+toplot.pop.lowprey <- cbind.data.frame(prey = gradient.popxprey[[1]]$XDataNew$prey.abu,
+                                         pop = pop.gradient,
+                                         pop.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.pop.lowprey[3,],
+                                         low95 = qpred.pop.lowprey[1,], 
+                                         low75 = qpred.pop.lowprey[2,], 
+                                         high75 = qpred.pop.lowprey[4,], 
+                                         high95 = qpred.pop.lowprey[5,])
+
+toplot.pop.meanprey <- cbind.data.frame(prey = gradient.popxprey[[2]]$XDataNew$prey.abu,
+                                         pop = pop.gradient,
+                                         pop.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.pop.meanprey[3,],
+                                         low95 = qpred.pop.meanprey[1,], 
+                                         low75 = qpred.pop.meanprey[2,], 
+                                         high75 = qpred.pop.meanprey[4,], 
+                                         high95 = qpred.pop.meanprey[5,])
+
+toplot.pop.highprey <- cbind.data.frame(prey = gradient.popxprey[[3]]$XDataNew$prey.abu,
+                                         pop = pop.gradient,
+                                         pop.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.pop.highprey[3,],
+                                         low95 = qpred.pop.highprey[1,], 
+                                         low75 = qpred.pop.highprey[2,], 
+                                         high75 = qpred.pop.highprey[4,], 
+                                         high95 = qpred.pop.highprey[5,])
+
+toplot.pop.all <- rbind(toplot.pop.lowprey, toplot.pop.meanprey, toplot.pop.highprey)
+toplot.pop.all$site <- rownames(toplot.pop.all)
+
+write.csv(toplot.pop.all, paste0(Gradients_wd, "/Toplot_popxprey_sites.csv"), row.names = FALSE)
+```
+
+```{r extract values for plotting tree cover and prey}
+# extract env gradient
+tree.gradient <- gradient.treexprey[[1]]$XDataNew$tree.100m
+
+# Get Credible intervals for the three community predicitons
+for (i in 1:length(predS.treexprey)){
+    qpred =  apply(predS.treexprey[[i]], c(1), quantile, prob = c(0.025, 0.125, 0.5, 0.875, 0.975), na.rm = TRUE)
+    assign(paste0("qpred.tree.", prey.gradient.names[i]), qpred)
+      }
+  
+qpred.tree.lowprey  
+
+# Get Y X values from the model, to plot the points
+pY = rowSums(m$Y)
+pX = m$XData[, "tree.100m"]
+
+# Build dataframes with all the data
+toplot.tree.lowprey <- cbind.data.frame(prey = gradient.treexprey[[1]]$XDataNew$prey.abu,
+                                         tree = tree.gradient,
+                                         tree.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.tree.lowprey[3,],
+                                         low95 = qpred.tree.lowprey[1,], 
+                                         low75 = qpred.tree.lowprey[2,], 
+                                         high75 = qpred.tree.lowprey[4,], 
+                                         high95 = qpred.tree.lowprey[5,])
+
+toplot.tree.meanprey <- cbind.data.frame(prey = gradient.treexprey[[2]]$XDataNew$prey.abu,
+                                         tree = tree.gradient,
+                                         tree.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.tree.meanprey[3,],
+                                         low95 = qpred.tree.meanprey[1,], 
+                                         low75 = qpred.tree.meanprey[2,], 
+                                         high75 = qpred.tree.meanprey[4,], 
+                                         high95 = qpred.tree.meanprey[5,])
+
+toplot.tree.highprey <- cbind.data.frame(prey = gradient.treexprey[[3]]$XDataNew$prey.abu,
+                                         tree = tree.gradient,
+                                         tree.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.tree.highprey[3,],
+                                         low95 = qpred.tree.highprey[1,], 
+                                         low75 = qpred.tree.highprey[2,], 
+                                         high75 = qpred.tree.highprey[4,], 
+                                         high95 = qpred.tree.highprey[5,])
+
+toplot.tree.all <- rbind(toplot.tree.lowprey, toplot.tree.meanprey, toplot.tree.highprey)
+toplot.tree.all$site <- rownames(toplot.tree.all)
+
+write.csv(toplot.tree.all, paste0(Gradients_wd, "/Toplot_treexprey_sites.csv"), 
+          row.names = FALSE)
+```
+
+```{r extract values for plotting open green area and prey}
+# extract env gradient
+ogreen.gradient <- gradient.ogreenxprey[[1]]$XDataNew$open.green100m
+
+# Get Credible intervals for the three community predicitons
+for (i in 1:length(predS.ogreenxprey)){
+    qpred =  apply(predS.ogreenxprey[[i]], c(1), quantile, prob = c(0.025, 0.125, 0.5, 0.875, 0.975), na.rm = TRUE)
+    assign(paste0("qpred.ogreen.", prey.gradient.names[i]), qpred)
+      }
+  
+qpred.ogreen.lowprey  
+
+# Get Y X values from the model, to plot the points
+pY = rowSums(m$Y)
+pX = m$XData[, "open.green100m"]
+
+# Build dataframes with all the data
+toplot.ogreen.lowprey <- cbind.data.frame(prey = gradient.ogreenxprey[[1]]$XDataNew$prey.abu,
+                                         ogreen = ogreen.gradient,
+                                         ogreen.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.ogreen.lowprey[3,],
+                                         low95 = qpred.ogreen.lowprey[1,], 
+                                         low75 = qpred.ogreen.lowprey[2,], 
+                                         high75 = qpred.ogreen.lowprey[4,], 
+                                         high95 = qpred.ogreen.lowprey[5,])
+
+toplot.ogreen.meanprey <- cbind.data.frame(prey = gradient.ogreenxprey[[2]]$XDataNew$prey.abu,
+                                         ogreen = ogreen.gradient,
+                                         ogreen.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.ogreen.meanprey[3,],
+                                         low95 = qpred.ogreen.meanprey[1,], 
+                                         low75 = qpred.ogreen.meanprey[2,], 
+                                         high75 = qpred.ogreen.meanprey[4,], 
+                                         high95 = qpred.ogreen.meanprey[5,])
+
+toplot.ogreen.highprey <- cbind.data.frame(prey = gradient.ogreenxprey[[3]]$XDataNew$prey.abu,
+                                         ogreen = ogreen.gradient,
+                                         ogreen.obs = pX,
+                                         sp.obs = pY,
+                                         beta = qpred.ogreen.highprey[3,],
+                                         low95 = qpred.ogreen.highprey[1,], 
+                                         low75 = qpred.ogreen.highprey[2,], 
+                                         high75 = qpred.ogreen.highprey[4,], 
+                                         high95 = qpred.ogreen.highprey[5,])
+
+toplot.ogreen.all <- rbind(toplot.ogreen.lowprey, toplot.ogreen.meanprey, toplot.ogreen.highprey)
+toplot.ogreen.all$site <- rownames(toplot.ogreen.all)
+
+write.csv(toplot.ogreen.all, paste0(Gradients_wd, "/Toplot_ogreenxprey_sites.csv"),
+          row.names = FALSE)
+```

@@ -1,0 +1,119 @@
+---
+title: "Explore_bird_data"
+author: "Aimara Planillo"
+date: "3/30/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+library(dplyr)
+```
+
+# Summaries of the bird data
+
+* Three Traits: 
+  ~ "migrant" + "diet.inv" + "log10.bodymass" 
+  
+* Birds species filtered:
+- No exotic sp
+- No species in only 1 or 2 sites
+- No aquatic species
+- Species abundance corrected by transect length
+
+
+```{r summary of bird abundances and prevalence}
+# load bird data
+birds_km <- read.csv("./4_processed_data/NEWBirds_abund_noexo_norare2_noaquatic_bykm.csv") # matrix with sites in rows and bird abund in columns
+birds_km$site <- tolower(birds_km$site)
+head(birds_km)
+ncol(birds_km)
+
+## Average species numbers
+bird_data <- birds_km %>%
+  select(-site) 
+  
+bird_species <- rowSums(bird_data > 0)
+bird_species
+
+summary(bird_species)
+
+## Prevalence - number of sites for each species
+colSums(bird_data > 0)
+
+prevalence <- data.frame(species = colnames(bird_data),  n.sites = colSums(bird_data > 0))
+prevalence$percent <- prevalence$n.sites/29 * 100
+prevalence
+
+colSums(prevalence[3] > 79.9) # Number of species in 80% or more sites
+colSums(prevalence[3] == 100) # Number of speciesin all sites
+
+
+## Abundaces
+
+# abundance in the sites present
+bird.avgabund <- colSums(bird_data) / prevalence$n.sites
+
+birds.summary <- cbind.data.frame(prevalence, avgabund = bird.avgabund)
+plot(birds.summary$avgabund~birds.summary$n.sites)
+birds.summary
+ 
+summary(birds.summary$avgabund)
+birds.summary[birds.summary$avgabund > 15,] # species with mean abundance > 15
+birds.summary[birds.summary$avgabund == min(birds.summary$avgabund),] # species with min mean abund
+
+
+### Check distribution of species abundance
+# histograms of the total abundance of the species
+hist(colSums(bird_data))
+# histograms of the sp with higher abundance in each taxa
+hist(bird_data[,which.max(colSums(bird_data))])
+
+
+```
+
+
+## Summary traits for the selected species to do the analysis
+
+```{r summmary table traits}
+# Load traits
+Trdata.tmp <- read.csv("./4_Processed_data/NEWBirds_traits_noexo_norare2_noaquatic.csv") # matrix with species in rows and traits in columns
+Trdata.tmp
+nrow(Trdata.tmp)
+ncol(Trdata.tmp)
+head(Trdata.tmp)
+
+Trdata <- Trdata.tmp %>% 
+  select(scientific2, diet.5cat, migrant, bodymass.value)
+  
+table(Trdata$diet.5cat)
+Trdata$diet.5cat <- factor(Trdata$diet.5cat, 
+                           levels = c("PlantSeed", "Invertebrate", "Omnivore", "VertFishScav"))
+
+Trdata$migrant <- factor(Trdata$migrant, 
+                           levels = c("Resident", "Semi", "Migrant" ))
+
+Trdata$log10.bodymass <- log(Trdata$bodymass.value)
+
+# get the species in rows
+birds.table <- t(bird_data)
+
+birds.table <- birds.table %>%
+  as.data.frame() %>%
+  mutate(species = rownames(.)) 
+
+head(birds.table)
+
+# add traits to species 
+## double check species order
+cbind.data.frame(Trdata$scientific2, birds.table$species)
+
+birds.full.table <- cbind.data.frame(birds.table, Trdata)
+# write.csv(birds.full.table, paste0(Model_wd, "/Birds_selection_abutrait_table.csv"), row.names = FALSE)
+```
+

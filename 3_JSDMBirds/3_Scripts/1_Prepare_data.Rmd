@@ -1,0 +1,163 @@
+---
+title: "Clean_data"
+author: "Aimara Planillo"
+date: "3/30/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean and Prepare data for bird analysis
+
+This script loads and cleans the bird data for JSDM
+Remove all the species that are
+- rare (less than 3 sites)
+- aquatic
+- exotic
+
+```{r packages}
+library(dplyr) # Working with data
+library(sf)
+```
+
+
+## Workspace
+```{r}
+WorkDir <- getwd()
+
+Data_wd <- file.path(WorkDir, "2_Raw_data/")
+Output_wd <- file.path(WorkDir, "4_Processed_data/")
+```
+
+
+# Correct bird data by TRANSECT LENGTH
+
+To correct the number of observations in each transect, we divide the number of individuals by the length of the transect
+
+```{r load data}
+transects <- read_sf(paste0(Data_wd,
+                            "/geodata//birds_transects_geometry_25833.gpkg"))
+transects
+plot(st_geometry(transects))
+# extract length
+transects.lengths <- st_length(transects)
+transects.birds <- cbind.data.frame(site = transects$routcode_2, 
+                                    length = as.numeric(transects.lengths))
+
+# Bird data
+birds.raw <- read.csv(paste0(Data_wd, "/Birds_sitexsp_fullnames.csv"))
+head(birds.raw)
+
+# Traid data
+birds.traits <- read.csv(paste0(Data_wd,  "/Birds_traits.csv"))
+colnames(birds.traits) <- tolower(colnames(birds.traits))
+head(birds.traits)
+
+# Create a new column with the scientific names in the same format as the dataframe with the abundance
+birds.traits$scientific2 <- as.character(birds.traits$scientific)
+
+scientific.names <- as.character(birds.traits$scientific)
+m <- list()
+for (i in 1:length(scientific.names)){
+  m <- strsplit(scientific.names, " ")[i]
+  birds.traits$scientific2[i] <- paste0(m[[1]][1], "_", m[[1]][2])
+}
+
+head(birds.traits)
+
+# Set birds raw data to the same order as they appear in the traits (alphabetical)
+order.alph <- as.character(c("SITE", birds.traits$scientific2))
+
+birds.raw <- birds.raw[order.alph]
+head(birds.raw)
+
+# Reorder the transects in the same order as the bird data and name them in the same way
+
+birds.raw$SITE
+transects.birds$site <- as.factor(toupper(transects.birds$site))
+
+transects.birds <- transects.birds[order(transects.birds$site),]
+transects.birds
+```
+
+
+```{r Correct bird data by transect length}
+birds.raw.corrected <- birds.raw
+for (i in 2:ncol(birds.raw)){
+  birds.raw.corrected[,i] <- birds.raw[,i] / transects.birds$length *1000 #we obtain number per km
+}
+birds.raw.corrected
+
+# double check numbers are ok:
+turdus <- as.numeric(birds.raw$Turdus_merula)
+lengths <- as.numeric(transects.birds$length)
+turdus/lengths * 1000
+```
+
+```{r remove introduced species}
+introduced.sp <- birds.traits$scientific2[birds.traits$introduced == "Introduced"]
+introduced.sp
+
+birds.native <- select(birds.raw, -introduced.sp)
+head(birds.native)
+nrow(birds.native)
+ncol(birds.native) -1 # -1 because of site column
+```
+
+```{r remove rare species}
+# Remove species that were located only in one (1) or one and two sites (2)
+colSums(birds.native[,2:ncol(birds.native)] != 0) >2
+
+birds.norare2 <- birds.native[2:ncol(birds.native)] [colSums(birds.native[,2:ncol(birds.native)] != 0) > 2]
+
+ncol(birds.native) -1
+ncol(birds.norare2)
+colSums(birds.native[,2:ncol(birds.native)] != 0) >2
+
+# get the species remaining
+birds.sp.norare2 <- colnames(birds.norare2[,1:ncol(birds.norare2)])
+length(birds.sp.norare2)
+
+# get the traits only for those
+birds.traits.norare2 <- birds.traits[birds.traits$scientific2 %in% birds.sp.norare2,]
+nrow((birds.traits.norare2)) # [1] 70
+```
+
+```{r remove aquatic species}
+# Remove species related to water
+aquatic2.sp <- birds.traits.norare2$scientific2[birds.traits.norare2$foraging_habitat == "freshwater"]
+aquatic2.sp
+
+birds.norare2.noaquatic <- select(birds.norare2, -aquatic2.sp)
+birds.norare2.noaq.sp <- colnames(birds.norare2.noaquatic[1:ncol(birds.norare2.noaquatic)])
+head(birds.norare2.noaquatic)
+ncol(birds.norare2.noaquatic) # [1] 66
+```
+
+
+# Save final clean tables
+```{r}
+# Birds Without exotic, species in 1 or 2 sites and aquatic sp corrected by transect length
+birds.norare2.noaq.corrected <- birds.raw.corrected %>%
+  select(., colnames(birds.norare2.noaquatic[1:ncol(birds.norare2.noaquatic)-1])) %>%
+  cbind(., site = birds.raw.corrected$SITE)
+
+ncol(birds.norare2.noaq.corrected)
+head(birds.norare2.noaq.corrected)
+
+write.csv (birds.norare2.noaq.corrected, 
+           paste0(Output_wd, "/NEWBirds_abund_noexo_norare2_noaquatic_bykm.csv"), row.names = FALSE)
+
+
+
+# Traits for filtered species
+traits.norare2.noaquatic <- birds.traits[birds.traits$scientific2 %in% birds.norare2.noaq.sp,]
+nrow(traits.norare2.noaquatic)
+
+write.csv(traits.norare2.noaquatic, paste0(Output_wd, "/NEWBirds_traits_noexo_norare2_noaquatic.csv"), row.names = FALSE)
+```
+
