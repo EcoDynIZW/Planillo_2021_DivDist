@@ -49,10 +49,10 @@ po/*~
 rsconnect/
 
 # Processed geo data that is 100+ MB
-1_EnvironmentalScales/FocalMean500m_Stack.tif
-1_EnvironmentalScales/FocalMean1km_Stack.tif
-1_EnvironmentalScales/FocalMean2km_Stack.tif
-1_EnvironmentalScales/FocalMean5km_Stack.tif
+1_EnvironmentalScales/4_Processed_data/FocalMean500m_Stack.tif
+1_EnvironmentalScales/4_Processed_data/FocalMean1km_Stack.tif
+1_EnvironmentalScales/4_Processed_data/FocalMean2km_Stack.tif
+1_EnvironmentalScales/4_Processed_data/FocalMean5km_Stack.tif
 
 # Output that is 100+ MB
 *_MCMCtrace_omega.pdf
