@@ -1,0 +1,327 @@
+---
+title: "Maps_Berlin_Carabids2"
+author: "A.Planillo"
+date: "10 Dezember 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Distribution maps of carabids in Berlin
+
+The maps area the prediction of the bees total abundance and bees species richness in the City of Berlin, based on a HMSC model built with observations in 42 plots, stored with the name of *carabids2* (Joint Species Distribution Model Approach). These are the dry-grassland plots used in BIBS project for which there are data for all invertebrate groups (bees, carabids, grasshoppers, spiders). Species that only appeared in one or two plots were removed because they affect model convergence and are not very relevant to the whole community.
+
+**The original model includes:**
+* 73 species of wild bees (*rare species removed*)
+* 42 plots (*shared by all the groups*)
+* Environmental covariates: imperv.100m + dist.water.100m + temp.100m     (*standardized: centered and scaled*)
+* Spatial location of plots as random variable (*location effects*)
+ 
+This model estimated the posterior distributions using 3 chains that run for 3000000 iterations and from which we extracted 30000 samples, using a thinning of 100.
+
+From the model, we will predict values for the whole city, using a resolution of 500m (grid of 500x500m). Previously, we have extracted the environmental values at this resolution (same as the model, so no intermediate step), and we have standardized the values using the same parameters that we used previously to standardize the predictor values in the model: mean and standard deviation of the predictor values used to create the model. This transformation was already done, so here we only need to load the data.
+
+Within this script we will prepare the following **maps**:
+* Map of total abundance in Berlin
+* Map of species richness
+
+But first, we have to prepare the working environment:
+
+### Packages
+```{r, message=FALSE}
+library(Hmsc)
+library(parallel) 
+# library(abind)
+#library(corrplot)
+#library(ggplot2)
+#library(dplyr)
+library(sf)
+library(tmap)
+library(raster)
+```
+
+
+### Workspace
+
+```{r}
+# WorkDir <- getwd()
+WorkDir <- "O:/Cluster_Planillo_Aimara/JSDMs_invertebrates"
+
+Data_wd <- file.path(WorkDir, "2_Raw_data/ForPrediction")
+Model_wd <- file.path(WorkDir, "5_Results/InvertebrateModels_3sites")
+Maps_wd <- file.path(WorkDir, "2_Raw_data/ForPrediction/maps")
+
+Output_wd <- file.path(WorkDir, "5_Results/InvertebrateModels_3sites/Maps_prediction")
+```
+
+### Environmental layers for maps
+
+We are going to use the border of the city of berlin and water bodies to give some context
+Load berlin border and transform it to the correct projection
+```{r}
+berlin.out <- read_sf(paste0(Maps_wd,"/Berlin_border.gpkg"))
+berlin.out <- berlin.out %>% 
+  st_set_crs(NA) %>% 
+  st_set_crs(3035) %>%
+  st_transform(crs=25833)
+```
+
+Load water bodies
+```{r}
+water <- read_sf(paste0(Maps_wd, "/waterbodies_Berlin_25833.gpkg"))
+```
+
+Load locations of bibs plots
+```{r}
+bibsplots <- read_sf(paste0(Maps_wd, "/Dry_Grassland_Plots_Berlin_25833.gpkg"))
+```
+
+And finally we see all the maps together to check if everything works ok
+```{r}
+plot(st_geometry(berlin.out))
+plot(st_geometry(water), add=TRUE, 
+     col="blue")
+plot(st_geometry(bibsplots), add=TRUE, 
+     col="red", pch=16)
+```
+
+
+### Load Carabids model
+Load the model
+```{r}
+load(file= file.path(Model_wd, "model_pois_carabids2_abu_3sites.Rdata"))
+```
+
+
+## First step: get predictions of the model 
+
+For doing the maps, both the maps for the plots and the maps for the whole city, we first need to extract the predictions of the model, based on the environmental covariates and the associations between the species
+
+Load the data of environmental covariates for whole berlin. we are going to use a 500m resolution to do the process in a reasonable
+amount of time.
+This data have been previously centered and scale with the same values as the variables used in the model
+We create a new dataframe with the variables we are going to use for prediction (*using the same names as they have in the model!*) and spatial location
+```{r}
+ncol(m$Y)
+m$covNames
+
+grid.tmp100m <- read.csv(file.path(Data_wd, "/predict_grid_bibs_plots_cs_100m.csv"))
+grid <- as.data.frame(cbind(x = grid.tmp100m$x,
+                            y = grid.tmp100m$y,
+                            imperv.100m = grid.tmp100m$impervious_surface,
+                            dist.water.100m = grid.tmp100m$distance_water,
+                            temp.100m = grid.tmp100m$temp_day))
+
+head(grid)
+```
+
+There are many NA in the data, but they are outside the area of interest, so we remove then to improve code eficiency
+```{r}
+# Remove NAs
+grid2 <- grid[complete.cases(grid), ]
+head(grid2)
+str(grid2)
+```
+
+
+
+As predicting for whole Berlin takes a long time and uses a lot of computacional power, we divide the dataset into
+smaller datasets for the prediction. We do the prediction for each of these subsets and then, we paste together the results, getting the map of the full city.
+
+1.Divide the data into groups of 50 rows so the prediction will use less memory, doing one group at a time
+```{r}
+grid2$split <- dismo::kfold( x = grid2, k = floor(nrow(grid2)/50)+1 )
+
+# Transform into a list of dataframes based on the group assigned in the previous step
+grid2.list <- split(x = grid2, f = grid2$split )
+print(paste0("Number of folds = ", length(grid2.list), " (Groups of 50 rows)"))
+head(grid2.list[[1]])
+```
+
+To simplify our proccess we make all the step for the prediction of the JSDM into a function
+```{r}
+my.predict.fun <- function(grid) {
+  #DEFINING THE NEW STUDY DESIGN
+  myNew <- nrow(grid)
+  dfPiNew <- matrix(NA, myNew, 1)
+  dfPiNew[,1] <- sprintf('new_Sample_%.3d', 1:myNew)
+  dfPiNew = as.data.frame(dfPiNew)
+  colnames(dfPiNew) = m$levelNames
+  dfPiAll=rbind(m$dfPi,dfPiNew)
+  #DEFINING RANDOM EFFECTS THAT INCLUDE BOTH OLD (USED FOR MODEL FITTING) AND NEW (THE GRID DATA) UNITS
+  rL1=m$rL[[1]]$clone()
+  xy = grid[,1:2]
+  xyold = rL1$s
+  rownames(xy) = dfPiNew[,1]
+  colnames(xy) = colnames(xyold)
+  xyall = rbind(xyold,xy)
+  rL1$pi = dfPiAll[,1]
+  rL1$s = xyall
+  predYR = apply(abind::abind(m$predict(dfPiNew = dfPiNew, XData = grid, rL = list(rL1), expected = FALSE, 
+                                        predictEtaMean =  TRUE),along=3),c(1,2),mean)
+  return(predYR)
+}
+```
+
+
+```{r, echo=FALSE, eval=FALSE}
+# Test if the function works
+grid.test <- grid2[1000:1005,]
+my.predict.fun(grid.test)
+```
+
+Apply the function to all elements in the list, i.e all the subsets with 100 rows, one after another
+Paste then together in one dataframe and reorder them, so they keep the same order as in the original file from which we extracted the environemntal covariates. Finally, we save the data.
+The first and last line of the code are used to know the total time that R is running the command
+
+```{r}
+fulltime <- proc.time()
+
+#m
+#grid
+
+#Make the code use several cores at the same time
+cl <- makeCluster(detectCores()-20) # Using 24-20 cores = 4 (no many more because it uses a lot of memory in this case)
+clusterExport(cl, c("m")) # export objects to use to all cores
+clusterEvalQ(cl, library("Hmsc")) # export packages to use to all cores
+res.list <- parLapply(cl, grid2.list, my.predict.fun) # function to run the code in parallel and object to store the results
+stopCluster(cl) # Stop the parallel process
+
+# Paste all results in the same dataframe and recover the original order of the raster cells, 
+# so we can paste it in a raster to create a new map
+res.df <- do.call("rbind", res.list) 
+fulltime.end <- proc.time()
+fulltime.end - fulltime
+
+# Reorder back to original position
+my.order <- as.numeric(row.names(res.df))
+res.df <- cbind.data.frame(my.order, res.df)
+res.df <- res.df[order(res.df$my.order),]
+head(res.df)
+
+# Get general abundance and richness
+carabids.abu <- rowSums(res.df[,-1])# Abundance per site. We remove the first columns because it indicates the number of the line
+carabids.rich <- rowSums(res.df[,-1] > 0.5)# Richness per site. We decide to use an abundance higher than 0.5 as presence
+
+# Add coordinates 
+carabids.pred <- cbind(x=grid2$x, y=grid2$y, res.df, abundance=carabids.abu, richness=carabids.rich)
+head(carabids.pred)
+
+# save results
+write.csv(carabids.pred , paste0(Output_wd, "/Predict_carabids_Berlin.csv"), row.names = F)
+```
+
+
+## Second step: plot the predicted map
+
+If we start at this point, we should load the data file with the predictions for Berlin at 500m resolution
+```{r, eval=FALSE}
+carabids.pred <- read.csv(paste0(Output_wd, "/Predict_carabids_Berlin.csv"))
+head(carabids.pred)
+str(carabids.pred)
+```
+
+
+We need a raster to paste the values, so we can plot them in a full map
+One way of doing it is to load example raster with environmet data to have same extension and resolution
+```{R}
+focal.500m <- stack(paste0(Maps_wd, "/FocalMean500m_Stack.tif"))
+names.focal <- read.csv(paste0(Maps_wd, "/names_focal_stack.csv"))
+names(focal.500m) <- names.focal$x
+```
+
+
+As we removed all the NAs from the dataset for prediction, we first need to select the cells of the raster for which we actually do have the predicted values. We do this using the xy coordinates of the data
+```{r}
+# extract the cell numbers that correspond with the cells with predicitons 
+# based on coordinates
+cells <- cellFromXY(raster.500m, as.matrix(carabids.pred[, c("x", "y")]))
+
+raster.abu <- raster.500m
+raster.rich <- raster.500m
+
+# Assign values to raster cells
+raster.abu[cells] <- carabids.pred$abundance
+plot(raster.abu)
+
+raster.rich[cells] <- carabids.pred$richness
+plot(raster.rich)
+
+rasters.carabids <- stack(raster.abu, raster.rich)
+names(rasters.carabids) <- c("carabids.abund", "carabids.richness")
+
+# In this case this step is not necessary, as we only have cells inside berlin, but we can do it anyway
+rasters.carabids.mask <- mask(rasters.carabids, berlin.out)
+```
+
+
+## Plot the map for abundance
+```{r, echo=FALSE}
+map.abu.berlin <- tm_shape(rasters.carabids.mask) +
+  tm_raster("carabids.abund", title = "Predicted carabids abundance",
+             # palette = rev(heat.colors(10)),
+             palette = "OrRd",
+             style = "cont") +
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin.out) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_layout(main.title = "Carabids abundance \nres = 500m",
+            compass.type = "4star",
+            legend.title.size = 1.2,
+            legend.text.size = 0.8, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.02,0.02,0.02,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 2) +
+  tm_scale_bar(position=c("left", "bottom")) 
+
+map.abu.berlin
+tmap_save(map.abu.berlin, filename = paste0(Output_wd, "/Map_berlin_carabids_abu.png"), 
+          dpi = 600)
+
+# to add the plots and observed abundance, we can add:
+  # tm_shape(difference.spatial) +
+#     tm_symbols(col="observed.abu", alpha = 1, size = 0.4,
+#                border.col = "black",
+#                palette = "OrRd", 
+#                legend.col.show = FALSE) +
+```
+
+
+## Plot the map for richness
+```{r, echo=FALSE}
+map.rich.berlin <- tm_shape(rasters.carabids.mask) +
+  tm_raster("carabids.richness", title = "Predicted carabids species richness",
+             # palette = rev(heat.colors(10)),
+             palette = "Greens",
+             style = "cont") +
+tm_shape(water) +
+  tm_polygons("lightblue", border.col = NULL) +
+tm_shape(berlin.out) +
+  tm_borders("ivory4", lwd = 2.5) +
+tm_layout(main.title = "Carabids species richness \nres = 500m",
+            compass.type = "4star",
+            legend.title.size = 1.2,
+            legend.text.size = 0.8, 
+          legend.bg.color = "white",
+          legend.position = c("right", "top"),
+            inner.margins = c(0.02,0.02,0.02,0.1),
+          legend.frame = TRUE)+
+  tm_compass(position = c("left", "bottom"),
+             size = 2) +
+  tm_scale_bar(position=c("left", "bottom")) 
+
+map.rich.berlin
+tmap_save(map.rich.berlin, filename = paste0(Output_wd, "/Map_berlin_carabids_richness.png"), 
+          dpi = 600)
+```
+
+
